@@ -16,6 +16,7 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
 
   async function handleLogin() {
+    console.log('로그인 버튼 눌림!'); // ← 이거 추가
     if (!appKey.trim() || !appSecret.trim()) {
       Alert.alert('입력 오류', 'App Key와 App Secret을 입력해주세요.');
       return;

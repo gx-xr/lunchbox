@@ -7,9 +7,10 @@ import { useRouter } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/authStore';
 import { fetchAccountSummary } from '../../services/account';
+import { fetchOptionBoard } from '../../services/symbol';
 import { AccountSummary } from '../../types/trading';
 
-// ─── mock 데이터 ───────────────────────────────────────────
+// ─── mock 데이터 (포지션/주문은 아직 mock) ─────────────────
 const mockPositions = [
   { code: 'F2606', name: 'KOSPI200 선물 2606', qty: 2, avgPrice: 360.50, currentPrice: 362.50, side: 'BUY' },
   { code: '201C6360', name: '위클리 콜 360.0', qty: 5, avgPrice: 2.80, currentPrice: 3.20, side: 'BUY' },
@@ -24,25 +25,6 @@ const mockOrders = [
   { id: 'ORD005', code: '201C6355', name: '위클리 콜 355.0', side: 'BUY', qty: 2, price: 16.00, status: 'CANCELLED' },
 ];
 
-const mockWeeklyOptions = {
-  call: [
-    { code: '201C6380', strike: 380.0, price: 1.10, change: 0.20, changeRate: 22.22 },
-    { code: '201C6375', strike: 375.0, price: 2.50, change: 0.35, changeRate: 16.27 },
-    { code: '201C6370', strike: 370.0, price: 4.20, change: 0.45, changeRate: 12.00 },
-    { code: '201C6365', strike: 365.0, price: 7.30, change: 0.60, changeRate: 8.96 },
-    { code: '201C6360', strike: 360.0, price: 11.30, change: 0.80, changeRate: 7.62 },
-    { code: '201C6355', strike: 355.0, price: 16.20, change: 1.00, changeRate: 6.58 },
-  ],
-  put: [
-    { code: '201P6345', strike: 345.0, price: 1.85, change: -0.30, changeRate: -13.95 },
-    { code: '201P6350', strike: 350.0, price: 2.55, change: -0.25, changeRate: -8.93 },
-    { code: '201P6355', strike: 355.0, price: 4.10, change: -0.40, changeRate: -8.89 },
-    { code: '201P6360', strike: 360.0, price: 6.80, change: -0.55, changeRate: -7.49 },
-    { code: '201P6365', strike: 365.0, price: 10.35, change: -0.70, changeRate: -6.33 },
-    { code: '201P6370', strike: 370.0, price: 15.60, change: -0.90, changeRate: -5.45 },
-  ],
-};
-
 const mockFutures = { code: 'F2606', name: 'KOSPI200 선물 2606', price: 362.50, change: 1.25, changeRate: 0.35 };
 
 type HomeTab = 'ACCOUNT' | 'POSITION' | 'ORDERS';
@@ -53,9 +35,39 @@ function formatKRW(n: number) { return n.toLocaleString('ko-KR') + '원'; }
 
 // ─── 계좌 탭 ───────────────────────────────────────────────
 function AccountTab({ account, loading, router }: any) {
+  const token = useAuthStore((s) => s.token);
   const [optionTab, setOptionTab] = useState<OptionTab>('CALL');
   const [weeklyDay, setWeeklyDay] = useState<WeeklyDay>('MON');
-  const options = optionTab === 'CALL' ? mockWeeklyOptions.call : mockWeeklyOptions.put;
+  const [liveCallOptions, setLiveCallOptions] = useState<any[]>([]);
+  const [livePutOptions, setLivePutOptions] = useState<any[]>([]);
+  const [optionLoading, setOptionLoading] = useState(true);
+
+  useEffect(() => {
+    if (!token) return;
+    setOptionLoading(true);
+
+    Promise.all([
+      fetchOptionBoard(token, '', '0'), // 콜
+      fetchOptionBoard(token, '', '1'), // 풋
+    ]).then(([callData, putData]) => {
+      if (callData?.t2301OutBlock1) {
+        const filtered = callData.t2301OutBlock1
+          .filter((o: any) => ['1', '2', '3'].includes(o.atmgubun))
+          .filter((o: any) => parseFloat(o.price) > 0)
+          .slice(0, 8);
+        setLiveCallOptions(filtered);
+      }
+      if (putData?.t2301OutBlock1) {
+        const filtered = putData.t2301OutBlock1
+          .filter((o: any) => ['1', '2', '3'].includes(o.atmgubun))
+          .filter((o: any) => parseFloat(o.price) > 0)
+          .slice(0, 8);
+        setLivePutOptions(filtered);
+      }
+    }).finally(() => setOptionLoading(false));
+  }, [token]);
+
+  const options = optionTab === 'CALL' ? liveCallOptions : livePutOptions;
 
   return (
     <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
@@ -111,9 +123,9 @@ function AccountTab({ account, loading, router }: any) {
           </View>
         </TouchableOpacity>
 
-        {/* 위클리 옵션 */}
+        {/* 위클리 옵션 헤더 */}
         <View style={s.weeklyHeader}>
-          <Text style={s.weeklyTitle}>위클리 옵션</Text>
+          <Text style={s.weeklyTitle}>위클리 옵션 (실시간)</Text>
           <View style={s.toggleGroup}>
             {(['MON', 'THU'] as WeeklyDay[]).map((d) => (
               <TouchableOpacity
@@ -129,6 +141,7 @@ function AccountTab({ account, loading, router }: any) {
           </View>
         </View>
 
+        {/* 콜/풋 탭 */}
         <View style={s.optionTabRow}>
           <TouchableOpacity
             style={[s.optionTab, optionTab === 'CALL' && s.callActive]}
@@ -144,25 +157,32 @@ function AccountTab({ account, loading, router }: any) {
           </TouchableOpacity>
         </View>
 
+        {/* 옵션 리스트 */}
         <View style={s.optionHeader}>
           <Text style={[s.optionHeaderText, { flex: 1 }]}>행사가</Text>
           <Text style={[s.optionHeaderText, { width: 60, textAlign: 'right' }]}>현재가</Text>
           <Text style={[s.optionHeaderText, { width: 80, textAlign: 'right' }]}>등락률</Text>
         </View>
-        {options.map((opt) => (
-          <TouchableOpacity
-            key={opt.code}
-            style={s.optionRow}
-            onPress={() => router.push(`/order/${opt.code}`)}
-            activeOpacity={0.7}
-          >
-            <Text style={s.strikeText}>{opt.strike.toFixed(1)}</Text>
-            <Text style={s.optionPrice}>{opt.price.toFixed(2)}</Text>
-            <Text style={[s.optionRate, opt.changeRate >= 0 ? s.up : s.down]}>
-              {opt.changeRate >= 0 ? '+' : ''}{opt.changeRate.toFixed(2)}%
-            </Text>
-          </TouchableOpacity>
-        ))}
+
+        {optionLoading
+          ? <ActivityIndicator color="#3182f6" style={{ marginVertical: 20 }} />
+          : options.length === 0
+            ? <Text style={s.emptyText}>데이터 없음</Text>
+            : options.map((opt: any) => (
+              <TouchableOpacity
+                key={opt.optcode}
+                style={s.optionRow}
+                onPress={() => router.push(`/order/${opt.optcode}`)}
+                activeOpacity={0.7}
+              >
+                <Text style={s.strikeText}>{parseFloat(opt.actprice).toFixed(1)}</Text>
+                <Text style={s.optionPrice}>{parseFloat(opt.price).toFixed(2)}</Text>
+                <Text style={[s.optionRate, parseFloat(opt.diff) >= 0 ? s.up : s.down]}>
+                  {parseFloat(opt.diff) >= 0 ? '+' : ''}{parseFloat(opt.diff).toFixed(2)}%
+                </Text>
+              </TouchableOpacity>
+            ))
+        }
       </View>
       <View style={{ height: 32 }} />
     </ScrollView>
@@ -175,7 +195,6 @@ function PositionTab({ router }: any) {
 
   return (
     <ScrollView style={{ flex: 1 }}>
-      {/* 총 손익 */}
       <View style={s.card}>
         <Text style={s.cardTitle}>보유 포지션</Text>
         <View style={s.plRow}>
@@ -231,11 +250,9 @@ function OrdersTab() {
       { text: '아니오', style: 'cancel' },
       {
         text: '취소하기', style: 'destructive',
-        onPress: () => {
-          setOrders((prev) =>
-            prev.map((o) => o.id === id ? { ...o, status: 'CANCELLED' } : o)
-          );
-        },
+        onPress: () => setOrders((prev) =>
+          prev.map((o) => o.id === id ? { ...o, status: 'CANCELLED' } : o)
+        ),
       },
     ]);
   }
@@ -246,15 +263,14 @@ function OrdersTab() {
     return true;
   });
 
-  const statusLabel = (s: string) => {
-    if (s === 'PENDING') return { text: '미체결', color: '#f59e0b' };
-    if (s === 'FILLED') return { text: '체결', color: '#10b981' };
+  const statusLabel = (st: string) => {
+    if (st === 'PENDING') return { text: '미체결', color: '#f59e0b' };
+    if (st === 'FILLED') return { text: '체결', color: '#10b981' };
     return { text: '취소', color: '#aaa' };
   };
 
   return (
     <ScrollView style={{ flex: 1 }}>
-      {/* 필터 */}
       <View style={s.filterRow}>
         {(['ALL', 'PENDING', 'FILLED'] as const).map((f) => (
           <TouchableOpacity
@@ -269,9 +285,7 @@ function OrdersTab() {
         ))}
       </View>
 
-      {filtered.length === 0 && (
-        <Text style={s.emptyText}>주문 내역이 없습니다.</Text>
-      )}
+      {filtered.length === 0 && <Text style={s.emptyText}>주문 내역이 없습니다.</Text>}
 
       {filtered.map((order) => {
         const st = statusLabel(order.status);
@@ -285,19 +299,14 @@ function OrdersTab() {
                   </View>
                   <Text style={s.orderName}>{order.name}</Text>
                 </View>
-                <Text style={s.orderDetail}>
-                  {order.qty}계약 · {order.price.toLocaleString()}
-                </Text>
+                <Text style={s.orderDetail}>{order.qty}계약 · {order.price.toLocaleString()}</Text>
               </View>
               <View style={{ alignItems: 'flex-end', gap: 8 }}>
                 <View style={[s.statusBadge, { backgroundColor: st.color + '20' }]}>
                   <Text style={[s.statusText, { color: st.color }]}>{st.text}</Text>
                 </View>
                 {order.status === 'PENDING' && (
-                  <TouchableOpacity
-                    style={s.cancelBtn}
-                    onPress={() => cancelOrder(order.id)}
-                  >
+                  <TouchableOpacity style={s.cancelBtn} onPress={() => cancelOrder(order.id)}>
                     <Text style={s.cancelBtnText}>취소</Text>
                   </TouchableOpacity>
                 )}
@@ -326,18 +335,23 @@ export default function HomeScreen() {
     setAccount(data);
   }
 
+  async function onRefresh() {
+    setRefreshing(true);
+    await loadAccount();
+    setRefreshing(false);
+  }
+
   useEffect(() => {
     loadAccount().finally(() => setLoading(false));
   }, []);
 
   return (
     <SafeAreaView style={s.safe}>
-      {/* 헤더 */}
       <View style={s.header}>
         <Text style={s.headerTitle}>Lunchbox</Text>
       </View>
 
-      {/* 탭 */}
+      {/* 상단 탭 */}
       <View style={s.tabBar}>
         {([
           { key: 'ACCOUNT', label: '계좌' },
@@ -357,7 +371,7 @@ export default function HomeScreen() {
       </View>
 
       {/* 탭 콘텐츠 */}
-      <View style={{ flex: 1 }}>
+      <View style={{ flex: 1, backgroundColor: '#f5f6f8' }}>
         {activeTab === 'ACCOUNT' && (
           <AccountTab account={account} loading={loading} router={router} />
         )}
@@ -370,10 +384,9 @@ export default function HomeScreen() {
 
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f5f6f8' },
-  header: { paddingHorizontal: 16, paddingVertical: 12 },
+  header: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#f5f6f8' },
   headerTitle: { fontSize: 22, fontWeight: '800', color: '#1a1a1a' },
 
-  // 상단 탭바
   tabBar: {
     flexDirection: 'row', backgroundColor: '#fff',
     borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
@@ -384,7 +397,6 @@ const s = StyleSheet.create({
   tabText: { fontSize: 14, fontWeight: '600', color: '#bbb' },
   tabTextActive: { color: '#1a1a1a' },
 
-  // 카드
   card: {
     backgroundColor: '#fff', borderRadius: 16, padding: 18,
     marginHorizontal: 16, marginTop: 12,
@@ -393,7 +405,6 @@ const s = StyleSheet.create({
   },
   cardTitle: { fontSize: 13, color: '#888', fontWeight: '600', marginBottom: 14 },
 
-  // 계좌
   totalAsset: { fontSize: 28, fontWeight: '800', color: '#1a1a1a', marginBottom: 2 },
   totalLabel: { fontSize: 12, color: '#aaa', marginBottom: 14 },
   row: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#f5f5f5', paddingTop: 14 },
@@ -402,7 +413,6 @@ const s = StyleSheet.create({
   colLabel: { fontSize: 11, color: '#aaa', marginBottom: 4 },
   colValue: { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
 
-  // 선물
   futuresRow: {
     flexDirection: 'row', justifyContent: 'space-between',
     alignItems: 'center', paddingVertical: 14,
@@ -413,7 +423,6 @@ const s = StyleSheet.create({
   futuresPrice: { fontSize: 16, fontWeight: '800', color: '#1a1a1a', marginBottom: 2 },
   changeText: { fontSize: 12, fontWeight: '600' },
 
-  // 위클리
   weeklyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   weeklyTitle: { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
   toggleGroup: { flexDirection: 'row', gap: 6 },
@@ -421,6 +430,7 @@ const s = StyleSheet.create({
   toggleActive: { backgroundColor: '#1a1a1a' },
   toggleText: { fontSize: 12, fontWeight: '600', color: '#aaa' },
   toggleTextActive: { color: '#fff' },
+
   optionTabRow: { flexDirection: 'row', marginBottom: 12, gap: 8 },
   optionTab: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#f5f6f8', alignItems: 'center' },
   callActive: { backgroundColor: '#fff0f1' },
@@ -435,7 +445,6 @@ const s = StyleSheet.create({
   optionPrice: { width: 60, fontSize: 14, fontWeight: '700', color: '#1a1a1a', textAlign: 'right' },
   optionRate: { width: 80, fontSize: 13, fontWeight: '600', textAlign: 'right' },
 
-  // 포지션
   plRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
   plLabel: { fontSize: 13, color: '#888' },
   plValue: { fontSize: 20, fontWeight: '800' },
@@ -445,12 +454,12 @@ const s = StyleSheet.create({
   posDetail: { fontSize: 12, color: '#aaa' },
   posPrice: { fontSize: 15, fontWeight: '700', color: '#1a1a1a', marginBottom: 2 },
   posPL: { fontSize: 13, fontWeight: '700' },
+
   sideBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
   buyBadge: { backgroundColor: '#fff0f1' },
   sellBadge: { backgroundColor: '#eff5ff' },
   sideBadgeText: { fontSize: 11, fontWeight: '700' },
 
-  // 주문내역
   filterRow: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
   filterBtn: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20, backgroundColor: '#f5f6f8' },
   filterActive: { backgroundColor: '#1a1a1a' },
@@ -463,10 +472,7 @@ const s = StyleSheet.create({
   orderDetail: { fontSize: 12, color: '#aaa' },
   statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
   statusText: { fontSize: 12, fontWeight: '700' },
-  cancelBtn: {
-    paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8,
-    borderWidth: 1, borderColor: '#f04452',
-  },
+  cancelBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#f04452' },
   cancelBtnText: { fontSize: 12, fontWeight: '700', color: '#f04452' },
 
   up: { color: '#f04452' },

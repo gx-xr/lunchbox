@@ -1,15 +1,58 @@
-import { Symbol } from '../types/trading';
-import { mockSymbols } from '../mocks/symbols';
-
-
 const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
 
-// 옵션전광판 (t2301) - 위클리 콜/풋 행사가 리스트
+// ─── t8433: 지수옵션 마스터 조회 (위클리 종목코드 가져오기) ───
+export async function fetchWeeklyOptionCodes(token: string): Promise<{
+  callCode: string;
+  putCode: string;
+} | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/futureoption/market-data`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=UTF-8',
+        'authorization': `Bearer ${token}`,
+        'tr_cd': 't8433',
+        'tr_cont': 'N',
+        'tr_cont_key': '',
+        'mac_address': '',
+      },
+      body: JSON.stringify({
+        t8433InBlock: { dummy: '' },
+      }),
+    });
+    const data = await res.json();
+    console.log('t8433 전체 hname:', JSON.stringify(data?.t8433OutBlock?.map((i: any) => i.hname)));
+
+    if (!data?.t8433OutBlock) return null;
+
+  
+// hname 기준으로 위클리(2812) 콜/풋 찾기
+const weeklyCall = data.t8433OutBlock.find((item: any) =>
+  item.hname?.includes('2812') && item.hname?.trimStart().startsWith('C')
+);
+const weeklyPut = data.t8433OutBlock.find((item: any) =>
+  item.hname?.includes('2812') && item.hname?.trimStart().startsWith('P')
+);
+
+console.log('위클리 콜 항목:', JSON.stringify(weeklyCall));
+console.log('위클리 풋 항목:', JSON.stringify(weeklyPut));
+
+if (!weeklyCall || !weeklyPut) return null;
+
+return {
+  callCode: weeklyCall.expcode,  // shcode → expcode!
+  putCode: weeklyPut.expcode,
+};
+  } catch (e) {
+    return null;
+  }
+}
+
+// ─── t2301: 옵션전광판 (콜/풋 행사가 리스트) ─────────────────
 export async function fetchOptionBoard(
-  token: string,
-  expcode: string, // 종목코드 (예: KR4101W60008)
-  gubn: '0' | '1'  // 0: 콜, 1: 풋
-) {
+  token: string, 
+  expcode: string, 
+  gubn: '0' | '1' | 'W') {
   try {
     const res = await fetch(`${BASE_URL}/futureoption/market-data`, {
       method: 'POST',
@@ -22,22 +65,23 @@ export async function fetchOptionBoard(
         'mac_address': '',
       },
       body: JSON.stringify({
-        t2301InBlock: {
-          expcode,
-          gubn,
-        },
-      }),
+      t2301InBlock: {
+        yyyymm: expcode,  
+        gubun: gubn,
+      },
+    }),
     });
     const data = await res.json();
-    console.log('옵션전광판 응답:', JSON.stringify(data));
+    console.log('t2301 응답키:', JSON.stringify(Object.keys(data)));  // ← 추가!
+    console.log('t2301 rsp_cd:', data.rsp_cd, data.rsp_msg);          // ← 추가!
     return data;
   } catch (e) {
-    console.log('옵션전광판 에러:', e);
+    console.log('t2301 에러:', e);
     return null;
   }
 }
 
-// 선물/옵션 현재가 (t2101)
+// ─── t2101: 선물/옵션 현재가 시세 조회 ───────────────────────
 export async function fetchCurrentPrice(token: string, expcode: string) {
   try {
     const res = await fetch(`${BASE_URL}/futureoption/market-data`, {
@@ -51,29 +95,13 @@ export async function fetchCurrentPrice(token: string, expcode: string) {
         'mac_address': '',
       },
       body: JSON.stringify({
-        t2101InBlock: { expcode },
-      }),
+      t2101InBlock: { focode: expcode },  // expcode → focode!
+    }),
     });
     const data = await res.json();
-    console.log('현재가 응답:', JSON.stringify(data));
-    return data;
+    console.log('t2101 응답:', JSON.stringify(data?.t2101OutBlock));
+    return data?.t2101OutBlock ?? null;
   } catch (e) {
-    console.log('현재가 에러:', e);
     return null;
   }
-}
-
-// 기존 mock 검색 (종목 검색용)
-export async function searchSymbols(query: string): Promise<Symbol[]> {
-  await new Promise((r) => setTimeout(r, 200));
-  if (!query.trim()) return [];
-  const q = query.toLowerCase();
-  return mockSymbols.filter(
-    (s) => s.name.toLowerCase().includes(q) || s.code.includes(q)
-  );
-}
-
-export async function getSymbolByCode(code: string): Promise<Symbol | null> {
-  await new Promise((r) => setTimeout(r, 100));
-  return mockSymbols.find((s) => s.code === code) ?? null;
 }

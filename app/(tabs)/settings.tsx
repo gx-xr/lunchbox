@@ -9,7 +9,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function SettingsScreen() {
   const router = useRouter();
-  const { credentials, login, logout } = useAuthStore();
+  const { credentials, saveCredentials, logout } = useAuthStore();
 
   const [appKey, setAppKey] = useState(credentials?.appKey ?? '');
   const [appSecret, setAppSecret] = useState(credentials?.appSecret ?? '');
@@ -19,7 +19,7 @@ export default function SettingsScreen() {
       Alert.alert('입력 오류', '모든 항목을 입력해주세요.');
       return;
     }
-    login({ appKey, appSecret });
+    saveCredentials({ appKey, appSecret });
     Alert.alert('저장 완료', 'API 키가 업데이트되었습니다.');
   }
 

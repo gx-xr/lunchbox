@@ -1,5 +1,6 @@
 import { Tabs } from 'expo-router';
-
+import { Text } from 'react-native';
+ 
 export default function TabLayout() {
   return (
     <Tabs
@@ -12,18 +13,38 @@ export default function TabLayout() {
           height: 60,
           paddingBottom: 8,
         },
-        tabBarActiveTintColor: '#3182f6',
+        tabBarActiveTintColor: '#10c000',
         tabBarInactiveTintColor: '#bbb',
         tabBarLabelStyle: { fontSize: 11, fontWeight: '600' },
       }}
     >
       <Tabs.Screen
         name="index"
-        options={{ tabBarLabel: '홈', tabBarIcon: () => null }}
+        options={{
+          tabBarLabel: '홈',
+          tabBarIcon: () => <Text style={{ fontSize: 20 }}>🏠</Text>,
+        }}
+      />
+      <Tabs.Screen
+        name="orders"
+        options={{
+          tabBarLabel: '주문내역',
+          tabBarIcon: () => <Text style={{ fontSize: 20 }}>📋</Text>,
+        }}
+      />
+      <Tabs.Screen
+        name="search"
+        options={{
+          tabBarLabel: '검색',
+          tabBarIcon: () => <Text style={{ fontSize: 20 }}>🔍</Text>,
+        }}
       />
       <Tabs.Screen
         name="settings"
-        options={{ tabBarLabel: '설정', tabBarIcon: () => null }}
+        options={{
+          tabBarLabel: '설정',
+          tabBarIcon: () => <Text style={{ fontSize: 20 }}>⚙️</Text>,
+        }}
       />
     </Tabs>
   );

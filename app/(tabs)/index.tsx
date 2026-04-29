@@ -1,480 +1,372 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useState, useCallback } from 'react';
 import {
-  View, Text, ScrollView, StyleSheet, TouchableOpacity,
-  ActivityIndicator, RefreshControl, Alert,
+  View, Text, ScrollView, StyleSheet,
+  TouchableOpacity, ActivityIndicator, RefreshControl, Alert,
 } from 'react-native';
 import { useRouter } from 'expo-router';
-import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/authStore';
-import { fetchAccountSummary } from '../../services/account';
-import { fetchOptionBoard } from '../../services/symbol';
-import { AccountSummary } from '../../types/trading';
-
-// ─── mock 데이터 (포지션/주문은 아직 mock) ─────────────────
-const mockPositions = [
-  { code: 'F2606', name: 'KOSPI200 선물 2606', qty: 2, avgPrice: 360.50, currentPrice: 362.50, side: 'BUY' },
-  { code: '201C6360', name: '위클리 콜 360.0', qty: 5, avgPrice: 2.80, currentPrice: 3.20, side: 'BUY' },
-  { code: '201P6360', name: '위클리 풋 360.0', qty: 3, avgPrice: 2.00, currentPrice: 1.85, side: 'BUY' },
+import { fetchAccountAndPositions } from '../../services/account';
+import { fetchIndexPrices, fetchNearFutureCode } from '../../services/market';
+import { placeFuturesOrder } from '../../services/order';
+import { AccountInfo, Position, IndexPrice, AutoOrderType } from '../../types/trading';
+import AutoMonitorCard from '../../components/AutoMonitorCard';
+import AutoSetupSheet from '../../components/AutoSetupSheet';
+import { reinitAutoTradingStore } from '../../store/autoTradingStore';
+ 
+const AUTO_ORDER_ITEMS: { type: AutoOrderType; label: string }[] = [
+  { type: 'KOSPI200_PUT_SELL', label: '코스피 200\n위클리 풋옵션 매도' },
+  { type: 'KOSDAQ150_PUT_SELL', label: '코스닥 150\n위클리 풋옵션 매도' },
+  { type: 'KOSPI200_FUT_BUY', label: '코스피 200\n선물 매수' },
+  { type: 'KOSDAQ150_FUT_BUY', label: '코스닥 150\n선물 매수' },
 ];
-
-const mockOrders = [
-  { id: 'ORD001', code: 'F2606', name: 'KOSPI200 선물 2606', side: 'BUY', qty: 1, price: 361.00, status: 'PENDING' },
-  { id: 'ORD002', code: '201C6360', name: '위클리 콜 360.0', side: 'BUY', qty: 3, price: 11.20, status: 'PENDING' },
-  { id: 'ORD003', code: '201P6370', name: '위클리 풋 370.0', side: 'SELL', qty: 2, price: 15.80, status: 'FILLED' },
-  { id: 'ORD004', code: 'F2606', name: 'KOSPI200 선물 2606', side: 'SELL', qty: 1, price: 363.00, status: 'FILLED' },
-  { id: 'ORD005', code: '201C6355', name: '위클리 콜 355.0', side: 'BUY', qty: 2, price: 16.00, status: 'CANCELLED' },
-];
-
-const mockFutures = { code: 'F2606', name: 'KOSPI200 선물 2606', price: 362.50, change: 1.25, changeRate: 0.35 };
-
-type HomeTab = 'ACCOUNT' | 'POSITION' | 'ORDERS';
-type OptionTab = 'CALL' | 'PUT';
-type WeeklyDay = 'MON' | 'THU';
-
-function formatKRW(n: number) { return n.toLocaleString('ko-KR') + '원'; }
-
-// ─── 계좌 탭 ───────────────────────────────────────────────
-function AccountTab({ account, loading, router }: any) {
-  const token = useAuthStore((s) => s.token);
-  const [optionTab, setOptionTab] = useState<OptionTab>('CALL');
-  const [weeklyDay, setWeeklyDay] = useState<WeeklyDay>('MON');
-  const [liveCallOptions, setLiveCallOptions] = useState<any[]>([]);
-  const [livePutOptions, setLivePutOptions] = useState<any[]>([]);
-  const [optionLoading, setOptionLoading] = useState(true);
-
-  useEffect(() => {
-    if (!token) return;
-    setOptionLoading(true);
-
-    Promise.all([
-      fetchOptionBoard(token, '', '0'), // 콜
-      fetchOptionBoard(token, '', '1'), // 풋
-    ]).then(([callData, putData]) => {
-      if (callData?.t2301OutBlock1) {
-        const filtered = callData.t2301OutBlock1
-          .filter((o: any) => ['1', '2', '3'].includes(o.atmgubun))
-          .filter((o: any) => parseFloat(o.price) > 0)
-          .slice(0, 8);
-        setLiveCallOptions(filtered);
-      }
-      if (putData?.t2301OutBlock1) {
-        const filtered = putData.t2301OutBlock1
-          .filter((o: any) => ['1', '2', '3'].includes(o.atmgubun))
-          .filter((o: any) => parseFloat(o.price) > 0)
-          .slice(0, 8);
-        setLivePutOptions(filtered);
-      }
-    }).finally(() => setOptionLoading(false));
-  }, [token]);
-
-  const options = optionTab === 'CALL' ? liveCallOptions : livePutOptions;
-
+ 
+function formatAmount(n: number): string {
+  return n.toLocaleString('ko-KR');
+}
+ 
+function PositionCard({
+  position, onAutoRegister, token,
+}: {
+  position: Position;
+  onAutoRegister: (position: Position) => void;
+  token: string;
+}) {
+  const [expanded, setExpanded] = useState(false);
+  const [liquidating, setLiquidating] = useState(false);
+  const isProfit = position.evalPnl >= 0;
+  const isPutSell = position.side === 'SELL' && position.name.includes('P ');
+ 
+  // 청산 핸들러
+  const handleLiquidate = useCallback(() => {
+    const oppositeSide = position.side === 'SELL' ? '매수' : '매도';
+    Alert.alert(
+      '⚡ 청산',
+      `${position.name}\n${position.qty}계약 시장가 ${oppositeSide}로 청산하시겠습니까?`,
+      [
+        { text: '아니오', style: 'cancel' },
+        {
+          text: '청산하기',
+          style: 'destructive',
+          onPress: async () => {
+            setLiquidating(true);
+            try {
+              const result = await placeFuturesOrder(token, {
+                fnoIsuNo: position.code,
+                bnsTpCode: position.side === 'SELL' ? '2' : '1', // 반대 방향
+                orderType: '03', // 시장가
+                price: 0,
+                qty: position.qty,
+                trdPtnCode: '03', // 청산
+              });
+              if (result.success) {
+                Alert.alert('완료', `청산 주문 접수\n주문번호: ${result.ordNo}`);
+              } else {
+                Alert.alert('실패', result.message);
+              }
+            } catch (e) {
+              Alert.alert('오류', '청산 중 문제가 발생했습니다.');
+            } finally {
+              setLiquidating(false);
+            }
+          },
+        },
+      ]
+    );
+  }, [token, position]);
+ 
   return (
-    <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled">
-      {/* 계좌 요약 */}
-      <View style={s.card}>
-        <Text style={s.cardTitle}>내 계좌</Text>
-        {loading
-          ? <ActivityIndicator color="#3182f6" />
-          : account && <>
-            <Text style={s.totalAsset}>{formatKRW(account.deposit + account.evalProfit)}</Text>
-            <Text style={s.totalLabel}>총 자산</Text>
-            <View style={s.row}>
-              <View style={s.col}>
-                <Text style={s.colLabel}>예수금</Text>
-                <Text style={s.colValue}>{formatKRW(account.deposit)}</Text>
-              </View>
-              <View style={s.divider} />
-              <View style={s.col}>
-                <Text style={s.colLabel}>주문가능</Text>
-                <Text style={s.colValue}>{formatKRW(account.orderable)}</Text>
-              </View>
-              <View style={s.divider} />
-              <View style={s.col}>
-                <Text style={s.colLabel}>평가손익</Text>
-                <Text style={[s.colValue, account.evalProfit >= 0 ? s.up : s.down]}>
-                  {account.evalProfit >= 0 ? '+' : ''}{formatKRW(account.evalProfit)}
-                </Text>
-              </View>
+    <View style={styles.positionCard}>
+      <TouchableOpacity style={styles.positionRow} onPress={() => setExpanded(!expanded)} activeOpacity={0.7}>
+        <View style={styles.positionLeft}>
+          <Text style={styles.positionName} numberOfLines={1}>{position.name}</Text>
+          <View style={styles.positionBadgeRow}>
+            <View style={[styles.sideBadge, position.side === 'SELL' ? styles.sellBadge : styles.buyBadge]}>
+              <Text style={[styles.sideBadgeText, { color: position.side === 'SELL' ? '#3b82f6' : '#ec4899' }]}>
+                {position.side === 'SELL' ? '매도' : '매수'}
+              </Text>
             </View>
-          </>
-        }
-      </View>
-
-      {/* 선물/옵션 바로가기 */}
-      <View style={s.card}>
-        <Text style={s.cardTitle}>선물 / 옵션 바로가기</Text>
-
-        {/* 선물 */}
-        <TouchableOpacity
-          style={s.futuresRow}
-          onPress={() => router.push(`/order/${mockFutures.code}`)}
-          activeOpacity={0.7}
-        >
-          <View>
-            <Text style={s.futuresName}>{mockFutures.name}</Text>
-            <Text style={s.futuresCode}>{mockFutures.code}</Text>
+            <Text style={styles.positionQty}>×{position.qty}</Text>
           </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={s.futuresPrice}>{mockFutures.price.toLocaleString()}</Text>
-            <Text style={[s.changeText, mockFutures.change >= 0 ? s.up : s.down]}>
-              {mockFutures.change >= 0 ? '+' : ''}{mockFutures.change} ({mockFutures.changeRate}%)
-            </Text>
+        </View>
+        <View style={styles.positionRight}>
+          <Text style={[styles.positionPnl, { color: isProfit ? '#e53e3e' : '#3182f6' }]}>
+            {isProfit ? '+' : ''}{formatAmount(position.evalPnl)}
+          </Text>
+          <Text style={[styles.positionRate, { color: isProfit ? '#e53e3e' : '#3182f6' }]}>
+            {isProfit ? '+' : ''}{position.pnlRate.toFixed(2)}%
+          </Text>
+        </View>
+        <Text style={styles.expandArrow}>{expanded ? '∧' : '∨'}</Text>
+      </TouchableOpacity>
+ 
+      {expanded && (
+        <View style={styles.positionDetail}>
+          <View style={styles.detailDivider} />
+          <View style={styles.detailGrid}>
+            {[
+              ['평균가', formatAmount(position.avgPrice)],
+              ['잔고', String(position.qty)],
+              ['매입금액', formatAmount(position.buyAmt)],
+              ['평가금액', formatAmount(position.evalAmt)],
+              ['평가손익', (isProfit ? '+' : '') + formatAmount(position.evalPnl)],
+              ['수익률', (isProfit ? '+' : '') + position.pnlRate.toFixed(2) + '%'],
+            ].map(([label, value]) => (
+              <View key={label} style={styles.detailItem}>
+                <Text style={styles.detailLabel}>{label}</Text>
+                <Text style={[styles.detailValue,
+                  (label === '평가손익' || label === '수익률') ? { color: isProfit ? '#e53e3e' : '#3182f6' } : {}
+                ]}>{value}</Text>
+              </View>
+            ))}
           </View>
-        </TouchableOpacity>
-
-        {/* 위클리 옵션 헤더 */}
-        <View style={s.weeklyHeader}>
-          <Text style={s.weeklyTitle}>위클리 옵션 (실시간)</Text>
-          <View style={s.toggleGroup}>
-            {(['MON', 'THU'] as WeeklyDay[]).map((d) => (
+ 
+          {/* 버튼 영역 */}
+          <View style={styles.positionBtnRow}>
+            {/* 청산 버튼 — 항상 표시 */}
+            <TouchableOpacity
+              style={[styles.liquidateBtn, liquidating && styles.btnDisabled]}
+              onPress={handleLiquidate}
+              disabled={liquidating}
+              activeOpacity={0.8}
+            >
+              {liquidating
+                ? <ActivityIndicator size="small" color="#fff" />
+                : <Text style={styles.liquidateBtnText}>⚡ 청산</Text>
+              }
+            </TouchableOpacity>
+ 
+            {/* 자동화 등록 — 풋옵션 매도만 */}
+            {isPutSell && (
               <TouchableOpacity
-                key={d}
-                style={[s.toggleBtn, weeklyDay === d && s.toggleActive]}
-                onPress={() => setWeeklyDay(d)}
+                style={styles.autoRegisterBtn}
+                onPress={() => onAutoRegister(position)}
+                activeOpacity={0.8}
               >
-                <Text style={[s.toggleText, weeklyDay === d && s.toggleTextActive]}>
-                  {d === 'MON' ? '월' : '목'}
-                </Text>
+                <Text style={styles.autoRegisterText}>🤖 자동화</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+        </View>
+      )}
+    </View>
+  );
+}
+ 
+function IndexCard({ index }: { index: IndexPrice }) {
+  return (
+    <View style={styles.indexCard}>
+      <Text style={styles.indexName}>{index.name}</Text>
+      <View style={styles.indexRight}>
+        <Text style={[styles.indexPrice, { color: index.isUp ? '#e53e3e' : '#3182f6' }]}>{formatAmount(index.price)}</Text>
+        <Text style={[styles.indexChange, { color: index.isUp ? '#e53e3e' : '#3182f6' }]}>
+          {index.isUp ? '▲' : '▼'} {Math.abs(index.change).toFixed(2)} ({Math.abs(index.changeRate).toFixed(2)}%)
+        </Text>
+      </View>
+    </View>
+  );
+}
+ 
+export default function HomeScreen() {
+  const router = useRouter();
+  const { token, logout, setAcntNo } = useAuthStore();
+ 
+  const [account, setAccount] = useState<AccountInfo | null>(null);
+  const [positions, setPositions] = useState<Position[]>([]);
+  const [kospi200, setKospi200] = useState<IndexPrice | null>(null);
+  const [kosdaq150, setKosdaq150] = useState<IndexPrice | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [autoSheet, setAutoSheet] = useState<{
+    visible: boolean; putCode: string; putName: string;
+    actprice: number; currentPrice: number; market: 'KOSPI200' | 'KOSDAQ150';
+  }>({ visible: false, putCode: '', putName: '', actprice: 0, currentPrice: 0, market: 'KOSPI200' });
+ 
+  const loadData = useCallback(async () => {
+    if (!token) return;
+    try {
+      const [acctResult, futCode] = await Promise.all([
+        fetchAccountAndPositions(token),
+        fetchNearFutureCode(token),
+      ]);
+      if (acctResult) {
+        setAccount(acctResult.account);
+        setPositions(acctResult.positions);
+        setAcntNo(acctResult.account.acntNo);
+      }
+      const indexResult = await fetchIndexPrices(token, futCode);
+      setKospi200(indexResult.kospi200);
+      setKosdaq150(indexResult.kosdaq150);
+    } catch (e) {
+      console.log('홈 데이터 로드 에러:', e);
+    }
+  }, [token]);
+ 
+  useEffect(() => { loadData().finally(() => setLoading(false)); }, [loadData]);
+ 
+  const onRefresh = useCallback(async () => {
+    setRefreshing(true);
+    await loadData();
+    setRefreshing(false);
+  }, [loadData]);
+ 
+  const handleAutoRegister = useCallback((position: Position) => {
+    const market: 'KOSPI200' | 'KOSDAQ150' = position.name.includes('코스닥') ? 'KOSDAQ150' : 'KOSPI200';
+    const parts = position.name.trim().split(' ');
+    const actprice = parseFloat(parts[parts.length - 1].replace(/,/g, '')) || 0;
+    setAutoSheet({
+      visible: true,
+      putCode: position.code,
+      putName: position.name,
+      actprice,
+      currentPrice: position.avgPrice,
+      market,
+    });
+  }, []);
+ 
+  const handleAutoOrder = (type: AutoOrderType) => {
+    if (type === 'KOSDAQ150_PUT_SELL') router.push('/order/kosdaq-options');
+    else if (type === 'KOSPI200_PUT_SELL') router.push('/order/kospi-options');
+    else if (type === 'KOSPI200_FUT_BUY') router.push('/order/futures?market=KOSPI200');
+    else if (type === 'KOSDAQ150_FUT_BUY') router.push('/order/futures?market=KOSDAQ150');
+    else Alert.alert('준비 중', '곧 추가될 예정입니다.');
+  };
+ 
+  if (loading) {
+    return <View style={styles.loadingContainer}><ActivityIndicator size="large" color="#3182f6" /></View>;
+  }
+ 
+  return (
+    <>
+      <ScrollView
+        style={styles.container} contentContainerStyle={styles.content}
+        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+        showsVerticalScrollIndicator={false}
+      >
+        <View style={styles.header}>
+          <Text style={styles.appTitle}>🌱이삭줍기🌱</Text>
+          <TouchableOpacity onPress={async () => { await logout(); router.replace('/login'); }}>
+            <Text style={styles.logoutBtn}>로그아웃</Text>
+          </TouchableOpacity>
+        </View>
+ 
+        <View style={styles.accountCard}>
+          <View style={styles.accountHeader}>
+            <Text style={styles.accountLabel}>내 계좌</Text>
+            <Text style={styles.accountNo} numberOfLines={1}>{account?.acntNo ?? '-'}  {account?.acntNm ?? ''}</Text>
+          </View>
+          <Text style={styles.accountAmount}>{formatAmount(account?.ordAblAmt ?? 0)}원</Text>
+          <Text style={styles.accountSubLabel}>총 자산 (주문가능금액)</Text>
+        </View>
+ 
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>보유 포지션</Text>
+          {positions.length === 0 ? (
+            <View style={styles.emptyBox}><Text style={styles.emptyText}>보유 중인 포지션이 없습니다</Text></View>
+          ) : (
+            positions.map((pos) => (
+              <PositionCard
+                key={`${pos.code}-${pos.side}`}
+                position={pos}
+                onAutoRegister={handleAutoRegister}
+                token={token ?? ''}
+              />
+            ))
+          )}
+        </View>
+ 
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>실시간 지수</Text>
+          {kospi200 && <IndexCard index={kospi200} />}
+          {kosdaq150 && <IndexCard index={kosdaq150} />}
+          {!kospi200 && !kosdaq150 && (
+            <View style={styles.emptyBox}><Text style={styles.emptyText}>지수 데이터를 불러올 수 없습니다</Text></View>
+          )}
+        </View>
+ 
+        <AutoMonitorCard />
+ 
+        <View style={styles.section}>
+          <Text style={styles.sectionTitle}>바로가기</Text>
+          <View style={styles.autoOrderGrid}>
+            {AUTO_ORDER_ITEMS.map((item) => (
+              <TouchableOpacity key={item.type} style={styles.autoOrderBtn} onPress={() => handleAutoOrder(item.type)} activeOpacity={0.7}>
+                <Text style={styles.autoOrderText}>{item.label}</Text>
               </TouchableOpacity>
             ))}
           </View>
         </View>
-
-        {/* 콜/풋 탭 */}
-        <View style={s.optionTabRow}>
-          <TouchableOpacity
-            style={[s.optionTab, optionTab === 'CALL' && s.callActive]}
-            onPress={() => setOptionTab('CALL')}
-          >
-            <Text style={[s.optionTabText, optionTab === 'CALL' && s.callText]}>콜 CALL</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={[s.optionTab, optionTab === 'PUT' && s.putActive]}
-            onPress={() => setOptionTab('PUT')}
-          >
-            <Text style={[s.optionTabText, optionTab === 'PUT' && s.putText]}>풋 PUT</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* 옵션 리스트 */}
-        <View style={s.optionHeader}>
-          <Text style={[s.optionHeaderText, { flex: 1 }]}>행사가</Text>
-          <Text style={[s.optionHeaderText, { width: 60, textAlign: 'right' }]}>현재가</Text>
-          <Text style={[s.optionHeaderText, { width: 80, textAlign: 'right' }]}>등락률</Text>
-        </View>
-
-        {optionLoading
-          ? <ActivityIndicator color="#3182f6" style={{ marginVertical: 20 }} />
-          : options.length === 0
-            ? <Text style={s.emptyText}>데이터 없음</Text>
-            : options.map((opt: any) => (
-              <TouchableOpacity
-                key={opt.optcode}
-                style={s.optionRow}
-                onPress={() => router.push(`/order/${opt.optcode}`)}
-                activeOpacity={0.7}
-              >
-                <Text style={s.strikeText}>{parseFloat(opt.actprice).toFixed(1)}</Text>
-                <Text style={s.optionPrice}>{parseFloat(opt.price).toFixed(2)}</Text>
-                <Text style={[s.optionRate, parseFloat(opt.diff) >= 0 ? s.up : s.down]}>
-                  {parseFloat(opt.diff) >= 0 ? '+' : ''}{parseFloat(opt.diff).toFixed(2)}%
-                </Text>
-              </TouchableOpacity>
-            ))
-        }
-      </View>
-      <View style={{ height: 32 }} />
-    </ScrollView>
+ 
+        <View style={{ height: 32 }} />
+      </ScrollView>
+ 
+      <AutoSetupSheet
+        visible={autoSheet.visible}
+        onClose={() => setAutoSheet(prev => ({ ...prev, visible: false }))}
+        putCode={autoSheet.putCode}
+        putName={autoSheet.putName}
+        actprice={autoSheet.actprice}
+        currentPrice={autoSheet.currentPrice}
+        market={autoSheet.market}
+      />
+    </>
   );
 }
-
-// ─── 포지션 탭 ─────────────────────────────────────────────
-function PositionTab({ router }: any) {
-  const totalPL = mockPositions.reduce((sum, p) => sum + (p.currentPrice - p.avgPrice) * p.qty, 0);
-
-  return (
-    <ScrollView style={{ flex: 1 }}>
-      <View style={s.card}>
-        <Text style={s.cardTitle}>보유 포지션</Text>
-        <View style={s.plRow}>
-          <Text style={s.plLabel}>총 평가손익</Text>
-          <Text style={[s.plValue, totalPL >= 0 ? s.up : s.down]}>
-            {totalPL >= 0 ? '+' : ''}{totalPL.toFixed(2)}
-          </Text>
-        </View>
-      </View>
-
-      {mockPositions.map((p) => {
-        const pl = (p.currentPrice - p.avgPrice) * p.qty;
-        const isUp = pl >= 0;
-        return (
-          <TouchableOpacity
-            key={p.code}
-            style={s.card}
-            onPress={() => router.push(`/order/${p.code}`)}
-            activeOpacity={0.7}
-          >
-            <View style={s.posRow}>
-              <View style={{ flex: 1 }}>
-                <View style={s.posNameRow}>
-                  <View style={[s.sideBadge, p.side === 'BUY' ? s.buyBadge : s.sellBadge]}>
-                    <Text style={s.sideBadgeText}>{p.side === 'BUY' ? '매수' : '매도'}</Text>
-                  </View>
-                  <Text style={s.posName}>{p.name}</Text>
-                </View>
-                <Text style={s.posDetail}>{p.qty}계약 · 평균 {p.avgPrice.toLocaleString()}</Text>
-              </View>
-              <View style={{ alignItems: 'flex-end' }}>
-                <Text style={s.posPrice}>{p.currentPrice.toLocaleString()}</Text>
-                <Text style={[s.posPL, isUp ? s.up : s.down]}>
-                  {isUp ? '+' : ''}{pl.toFixed(2)}
-                </Text>
-              </View>
-            </View>
-          </TouchableOpacity>
-        );
-      })}
-      <View style={{ height: 32 }} />
-    </ScrollView>
-  );
-}
-
-// ─── 주문내역 탭 ───────────────────────────────────────────
-function OrdersTab() {
-  const [orders, setOrders] = useState(mockOrders);
-  const [filter, setFilter] = useState<'ALL' | 'PENDING' | 'FILLED'>('ALL');
-
-  function cancelOrder(id: string) {
-    Alert.alert('주문 취소', '이 주문을 취소하시겠습니까?', [
-      { text: '아니오', style: 'cancel' },
-      {
-        text: '취소하기', style: 'destructive',
-        onPress: () => setOrders((prev) =>
-          prev.map((o) => o.id === id ? { ...o, status: 'CANCELLED' } : o)
-        ),
-      },
-    ]);
-  }
-
-  const filtered = orders.filter((o) => {
-    if (filter === 'PENDING') return o.status === 'PENDING';
-    if (filter === 'FILLED') return o.status === 'FILLED';
-    return true;
-  });
-
-  const statusLabel = (st: string) => {
-    if (st === 'PENDING') return { text: '미체결', color: '#f59e0b' };
-    if (st === 'FILLED') return { text: '체결', color: '#10b981' };
-    return { text: '취소', color: '#aaa' };
-  };
-
-  return (
-    <ScrollView style={{ flex: 1 }}>
-      <View style={s.filterRow}>
-        {(['ALL', 'PENDING', 'FILLED'] as const).map((f) => (
-          <TouchableOpacity
-            key={f}
-            style={[s.filterBtn, filter === f && s.filterActive]}
-            onPress={() => setFilter(f)}
-          >
-            <Text style={[s.filterText, filter === f && s.filterTextActive]}>
-              {f === 'ALL' ? '전체' : f === 'PENDING' ? '미체결' : '체결'}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {filtered.length === 0 && <Text style={s.emptyText}>주문 내역이 없습니다.</Text>}
-
-      {filtered.map((order) => {
-        const st = statusLabel(order.status);
-        return (
-          <View key={order.id} style={s.card}>
-            <View style={s.orderRow}>
-              <View style={{ flex: 1 }}>
-                <View style={s.orderNameRow}>
-                  <View style={[s.sideBadge, order.side === 'BUY' ? s.buyBadge : s.sellBadge]}>
-                    <Text style={s.sideBadgeText}>{order.side === 'BUY' ? '매수' : '매도'}</Text>
-                  </View>
-                  <Text style={s.orderName}>{order.name}</Text>
-                </View>
-                <Text style={s.orderDetail}>{order.qty}계약 · {order.price.toLocaleString()}</Text>
-              </View>
-              <View style={{ alignItems: 'flex-end', gap: 8 }}>
-                <View style={[s.statusBadge, { backgroundColor: st.color + '20' }]}>
-                  <Text style={[s.statusText, { color: st.color }]}>{st.text}</Text>
-                </View>
-                {order.status === 'PENDING' && (
-                  <TouchableOpacity style={s.cancelBtn} onPress={() => cancelOrder(order.id)}>
-                    <Text style={s.cancelBtnText}>취소</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            </View>
-          </View>
-        );
-      })}
-      <View style={{ height: 32 }} />
-    </ScrollView>
-  );
-}
-
-// ─── 메인 홈 화면 ──────────────────────────────────────────
-export default function HomeScreen() {
-  const router = useRouter();
-  const token = useAuthStore((s) => s.token);
-  const [account, setAccount] = useState<AccountSummary | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [refreshing, setRefreshing] = useState(false);
-  const [activeTab, setActiveTab] = useState<HomeTab>('ACCOUNT');
-
-  async function loadAccount() {
-    if (!token) return;
-    const data = await fetchAccountSummary(token);
-    setAccount(data);
-  }
-
-  async function onRefresh() {
-    setRefreshing(true);
-    await loadAccount();
-    setRefreshing(false);
-  }
-
-  useEffect(() => {
-    loadAccount().finally(() => setLoading(false));
-  }, []);
-
-  return (
-    <SafeAreaView style={s.safe}>
-      <View style={s.header}>
-        <Text style={s.headerTitle}>Lunchbox</Text>
-      </View>
-
-      {/* 상단 탭 */}
-      <View style={s.tabBar}>
-        {([
-          { key: 'ACCOUNT', label: '계좌' },
-          { key: 'POSITION', label: '포지션' },
-          { key: 'ORDERS', label: '주문내역' },
-        ] as { key: HomeTab; label: string }[]).map((tab) => (
-          <TouchableOpacity
-            key={tab.key}
-            style={[s.tabBtn, activeTab === tab.key && s.tabBtnActive]}
-            onPress={() => setActiveTab(tab.key)}
-          >
-            <Text style={[s.tabText, activeTab === tab.key && s.tabTextActive]}>
-              {tab.label}
-            </Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {/* 탭 콘텐츠 */}
-      <View style={{ flex: 1, backgroundColor: '#f5f6f8' }}>
-        {activeTab === 'ACCOUNT' && (
-          <AccountTab account={account} loading={loading} router={router} />
-        )}
-        {activeTab === 'POSITION' && <PositionTab router={router} />}
-        {activeTab === 'ORDERS' && <OrdersTab />}
-      </View>
-    </SafeAreaView>
-  );
-}
-
-const s = StyleSheet.create({
-  safe: { flex: 1, backgroundColor: '#f5f6f8' },
-  header: { paddingHorizontal: 16, paddingVertical: 12, backgroundColor: '#f5f6f8' },
-  headerTitle: { fontSize: 22, fontWeight: '800', color: '#1a1a1a' },
-
-  tabBar: {
-    flexDirection: 'row', backgroundColor: '#fff',
-    borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
-    paddingHorizontal: 16,
+ 
+const styles = StyleSheet.create({
+  container: { flex: 1, backgroundColor: '#f5f6f8' },
+  content: { paddingHorizontal: 20, paddingTop: 56 },
+  loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f6f8' },
+  header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
+  appTitle: { fontSize: 24, fontWeight: '800', color: '#1a1a1a' },
+  logoutBtn: { fontSize: 13, color: '#aaa' },
+  accountCard: { backgroundColor: '#fff', borderRadius: 20, padding: 24, marginBottom: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
+  accountHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 },
+  accountLabel: { fontSize: 13, color: '#888', fontWeight: '600' },
+  accountNo: { fontSize: 12, color: '#aaa', flex: 1 },
+  accountAmount: { fontSize: 32, fontWeight: '800', color: '#1a1a1a', marginBottom: 4 },
+  accountSubLabel: { fontSize: 12, color: '#aaa' },
+  section: { marginBottom: 16 },
+  sectionTitle: { fontSize: 15, fontWeight: '700', color: '#1a1a1a', marginBottom: 10 },
+  emptyBox: { backgroundColor: '#fff', borderRadius: 16, padding: 24, alignItems: 'center', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  emptyText: { fontSize: 14, color: '#bbb' },
+  positionCard: { backgroundColor: '#fff', borderRadius: 16, marginBottom: 8, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2, overflow: 'hidden' },
+  positionRow: { flexDirection: 'row', alignItems: 'center', padding: 16, gap: 8 },
+  positionLeft: { flex: 1 },
+  positionName: { fontSize: 15, fontWeight: '700', color: '#1a1a1a', marginBottom: 4 },
+  positionBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  sideBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
+  sellBadge: { backgroundColor: '#dbeafe' },
+  buyBadge: { backgroundColor: '#fce7f3' },
+  sideBadgeText: { fontSize: 12, fontWeight: '600' },
+  positionQty: { fontSize: 12, color: '#888' },
+  positionRight: { alignItems: 'flex-end' },
+  positionPnl: { fontSize: 16, fontWeight: '700' },
+  positionRate: { fontSize: 12, marginTop: 2 },
+  expandArrow: { fontSize: 12, color: '#bbb', marginLeft: 4 },
+  positionDetail: { paddingHorizontal: 16, paddingBottom: 16 },
+  detailDivider: { height: 1, backgroundColor: '#f0f0f0', marginBottom: 12 },
+  detailGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 12, marginBottom: 14 },
+  detailItem: { width: '45%' },
+  detailLabel: { fontSize: 11, color: '#aaa', marginBottom: 2 },
+  detailValue: { fontSize: 14, fontWeight: '600', color: '#1a1a1a' },
+  positionBtnRow: { flexDirection: 'row', gap: 8 },
+  liquidateBtn: {
+    flex: 1, backgroundColor: '#f97316', borderRadius: 12,
+    paddingVertical: 12, alignItems: 'center',
   },
-  tabBtn: { paddingVertical: 12, paddingHorizontal: 16, marginRight: 4 },
-  tabBtnActive: { borderBottomWidth: 2, borderBottomColor: '#1a1a1a' },
-  tabText: { fontSize: 14, fontWeight: '600', color: '#bbb' },
-  tabTextActive: { color: '#1a1a1a' },
-
-  card: {
-    backgroundColor: '#fff', borderRadius: 16, padding: 18,
-    marginHorizontal: 16, marginTop: 12,
-    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10,
-    shadowOffset: { width: 0, height: 3 }, elevation: 2,
+  liquidateBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  autoRegisterBtn: {
+    flex: 1, backgroundColor: '#1a1a1a', borderRadius: 12,
+    paddingVertical: 12, alignItems: 'center',
   },
-  cardTitle: { fontSize: 13, color: '#888', fontWeight: '600', marginBottom: 14 },
-
-  totalAsset: { fontSize: 28, fontWeight: '800', color: '#1a1a1a', marginBottom: 2 },
-  totalLabel: { fontSize: 12, color: '#aaa', marginBottom: 14 },
-  row: { flexDirection: 'row', borderTopWidth: 1, borderTopColor: '#f5f5f5', paddingTop: 14 },
-  col: { flex: 1, alignItems: 'center' },
-  divider: { width: 1, backgroundColor: '#f0f0f0' },
-  colLabel: { fontSize: 11, color: '#aaa', marginBottom: 4 },
-  colValue: { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
-
-  futuresRow: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    alignItems: 'center', paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: '#f0f0f0', marginBottom: 16,
-  },
-  futuresName: { fontSize: 15, fontWeight: '700', color: '#1a1a1a', marginBottom: 2 },
-  futuresCode: { fontSize: 12, color: '#aaa' },
-  futuresPrice: { fontSize: 16, fontWeight: '800', color: '#1a1a1a', marginBottom: 2 },
-  changeText: { fontSize: 12, fontWeight: '600' },
-
-  weeklyHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
-  weeklyTitle: { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
-  toggleGroup: { flexDirection: 'row', gap: 6 },
-  toggleBtn: { paddingHorizontal: 12, paddingVertical: 5, borderRadius: 20, backgroundColor: '#f5f6f8' },
-  toggleActive: { backgroundColor: '#1a1a1a' },
-  toggleText: { fontSize: 12, fontWeight: '600', color: '#aaa' },
-  toggleTextActive: { color: '#fff' },
-
-  optionTabRow: { flexDirection: 'row', marginBottom: 12, gap: 8 },
-  optionTab: { flex: 1, paddingVertical: 10, borderRadius: 10, backgroundColor: '#f5f6f8', alignItems: 'center' },
-  callActive: { backgroundColor: '#fff0f1' },
-  putActive: { backgroundColor: '#eff5ff' },
-  optionTabText: { fontSize: 13, fontWeight: '700', color: '#ccc' },
-  callText: { color: '#f04452' },
-  putText: { color: '#3182f6' },
-  optionHeader: { flexDirection: 'row', paddingBottom: 8, borderBottomWidth: 1, borderBottomColor: '#f0f0f0', marginBottom: 4 },
-  optionHeaderText: { fontSize: 11, color: '#aaa', fontWeight: '600' },
-  optionRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 11, borderBottomWidth: 1, borderBottomColor: '#f8f8f8' },
-  strikeText: { flex: 1, fontSize: 14, fontWeight: '600', color: '#1a1a1a' },
-  optionPrice: { width: 60, fontSize: 14, fontWeight: '700', color: '#1a1a1a', textAlign: 'right' },
-  optionRate: { width: 80, fontSize: 13, fontWeight: '600', textAlign: 'right' },
-
-  plRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  plLabel: { fontSize: 13, color: '#888' },
-  plValue: { fontSize: 20, fontWeight: '800' },
-  posRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  posNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
-  posName: { fontSize: 14, fontWeight: '700', color: '#1a1a1a' },
-  posDetail: { fontSize: 12, color: '#aaa' },
-  posPrice: { fontSize: 15, fontWeight: '700', color: '#1a1a1a', marginBottom: 2 },
-  posPL: { fontSize: 13, fontWeight: '700' },
-
-  sideBadge: { paddingHorizontal: 8, paddingVertical: 3, borderRadius: 6 },
-  buyBadge: { backgroundColor: '#fff0f1' },
-  sellBadge: { backgroundColor: '#eff5ff' },
-  sideBadgeText: { fontSize: 11, fontWeight: '700' },
-
-  filterRow: { flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 12, gap: 8 },
-  filterBtn: { paddingHorizontal: 16, paddingVertical: 7, borderRadius: 20, backgroundColor: '#f5f6f8' },
-  filterActive: { backgroundColor: '#1a1a1a' },
-  filterText: { fontSize: 13, fontWeight: '600', color: '#aaa' },
-  filterTextActive: { color: '#fff' },
-  emptyText: { textAlign: 'center', color: '#bbb', fontSize: 14, marginTop: 40 },
-  orderRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center' },
-  orderNameRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 6 },
-  orderName: { fontSize: 14, fontWeight: '700', color: '#1a1a1a' },
-  orderDetail: { fontSize: 12, color: '#aaa' },
-  statusBadge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
-  statusText: { fontSize: 12, fontWeight: '700' },
-  cancelBtn: { paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8, borderWidth: 1, borderColor: '#f04452' },
-  cancelBtnText: { fontSize: 12, fontWeight: '700', color: '#f04452' },
-
-  up: { color: '#f04452' },
-  down: { color: '#3182f6' },
+  autoRegisterText: { fontSize: 14, fontWeight: '700', color: '#fff' },
+  btnDisabled: { opacity: 0.5 },
+  indexCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
+  indexName: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },
+  indexRight: { alignItems: 'flex-end' },
+  indexPrice: { fontSize: 18, fontWeight: '800' },
+  indexChange: { fontSize: 12, marginTop: 2 },
+  autoOrderGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
+  autoOrderBtn: { width: '47.5%', backgroundColor: '#fff', borderRadius: 16, padding: 20, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2, minHeight: 90 },
+  autoOrderText: { fontSize: 14, fontWeight: '700', color: '#1a1a1a', textAlign: 'center', lineHeight: 22 },
 });

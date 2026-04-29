@@ -228,7 +228,7 @@ export default function AutoSetupSheet({
             {/* 청산 예약가 */}
             <View style={s.section}>
               <View style={s.sectionHeader}>
-                <Text style={s.sectionTitle}>● 청산 예약가</Text>
+                <Text style={s.sectionTitle}>💰 청산 예약가</Text>
                 <Text style={s.sectionSub}>옵션가가 이 가격 이하면 자동 청산</Text>
               </View>
               <View style={s.inputRow}>
@@ -258,7 +258,7 @@ export default function AutoSetupSheet({
             {/* 선물 자동 매수 */}
             <View style={s.section}>
               <View style={s.sectionHeader}>
-                <Text style={s.sectionTitle}>● 선물 자동 매수</Text>
+                <Text style={s.sectionTitle}>🪙 선물 자동 매수</Text>
                 <Text style={s.sectionSub}>{marketName} 현물 {'<'} 행사가 시 실행 (15:30~15:35)</Text>
               </View>
               <View style={s.infoRow}>
@@ -274,7 +274,7 @@ export default function AutoSetupSheet({
                   <Text style={s.adjText}>－</Text>
                 </TouchableOpacity>
                 <TextInput
-                  style={s.inputBox} value={`${hedgeQty}계약`}
+                  style={s.inputBox} value={`${hedgeQty} 계약`}
                   onChangeText={(v) => setHedgeQty(v.replace(/[^0-9]/g, ''))}
                   keyboardType="numeric" textAlign="center"
                 />
@@ -360,7 +360,7 @@ export default function AutoSetupSheet({
                   </View>
  
                   {/* 지정호가 */}
-                  <Text style={[s.inputLabel, { marginTop: 12 }]}>지정호가 (최소 옵션 프리미엄 ≥ ?)</Text>
+                  <Text style={[s.inputLabel, { marginTop: 12 }]}>지정호가</Text>
                   <View style={s.quickRow}>
                     {['5', '7', '10', '15', '20'].map((v) => (
                       <TouchableOpacity
@@ -415,7 +415,7 @@ export default function AutoSetupSheet({
               )}
             </View>
  
-            {/* 장마감 자동처리 */}
+            {/* 장마감 자동처리 
             <View style={s.timeCard}>
               <Text style={s.timeTitle}>⏰ 장마감 자동처리</Text>
               {[
@@ -429,6 +429,7 @@ export default function AutoSetupSheet({
                 </View>
               ))}
             </View>
+            */}
  
             <View style={s.btnRow}>
               <TouchableOpacity style={s.skipBtn} onPress={onClose}>

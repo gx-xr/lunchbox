@@ -8,17 +8,7 @@ export default function RootLayout() {
       <Stack screenOptions={{ headerShown: false }}>
         <Stack.Screen name="login" />
         <Stack.Screen name="(tabs)" />
-        <Stack.Screen
-          name="order/[code]"
-          options={{
-            headerShown: true,
-            headerTitle: '주문',
-            headerBackTitle: '뒤로',
-            headerStyle: { backgroundColor: '#fff' },
-            headerTintColor: '#1a1a1a',
-            headerShadowVisible: false,
-          }}
-        />
+        
         <Stack.Screen
           name="order/kosdaq-options"
           options={{

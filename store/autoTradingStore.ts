@@ -1,12 +1,15 @@
 /**
  * store/autoTradingStore.ts
  * ✅ priceMargin 제거 (매수호가 그대로 주문)
+ * ✅ CallTradingEntry 추가 (콜매도 자동화)
+ * ✅ AutoSellConfig qty 추가 (다음 위클리 계약수)
  */
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { useAuthStore } from './authStore';
  
+// ─── 풋매도 자동화 엔트리 ─────────────────────────────────────
 export interface AutoTradingEntry {
   putCode: string;
   putName: string;
@@ -19,19 +22,39 @@ export interface AutoTradingEntry {
   currentPrice: number;
   registeredAt: string;
   acntNo: string;
-  emaEnabled: boolean; // ✅ AI 매도 (EMA) 활성화 여부
+  emaEnabled: boolean;
+  averageBasis: number;
+  basisCalculatedAt: string;
+}
+ 
+// ─── 콜매도 자동화 엔트리 ✅ ──────────────────────────────────
+export interface CallTradingEntry {
+  callCode: string;
+  callName: string;
+  actprice: number;
+  market: 'KOSPI200' | 'KOSDAQ150';
+  closingPrice: number;
+  hedgeQty: number;
+  futuresCode: string;
+  status: 'monitoring' | 'closed' | 'hedged';
+  currentPrice: number;
+  registeredAt: string;
+  acntNo: string;
+  averageBasis: number;
+  basisCalculatedAt: string;
 }
  
 // ─── 자동 풋매도 설정 ─────────────────────────────────────────
 export interface AutoSellConfig {
   enabled: boolean;
   market: 'KOSDAQ150' | 'KOSPI200';
-  nextWeeklyKey: string;        // 다음 위클리 (예: 'W4THU')
-  nextWeeklyLabel: string;      // 표시용 (예: 'W4 목요일')
-  sellTime: string;             // 매도 시점 (예: '1510')
-  gapThreshold: number;         // 기준값 (현물가 - 행사가 > 기준값)
-  priceThreshold: number;       // 지정호가 (최소 옵션 프리미엄)
-  // ✅ priceMargin 제거 — 매수호가 그대로 주문
+  nextWeeklyKey: string;
+  nextWeeklyLabel: string;
+  sellTime: string;       // "15:10" 형식
+  gapThreshold: number;
+  priceThreshold: number;
+  qty: number;            // ✅ 계약수 (디폴트 1)
+  actprice: number;       // ✅ 내가 매도한 풋옵션 행사가 (조건1 체크용)
   acntNo: string;
   sold: boolean;
   soldOrdNo?: string;
@@ -47,23 +70,37 @@ export interface AutoTradingLog {
 interface AutoTradingState {
   isRunning: boolean;
   entries: AutoTradingEntry[];
+  callEntries: CallTradingEntry[];
   autoSellConfigs: AutoSellConfig[];
   logs: AutoTradingLog[];
-  futures1530Done: boolean;  // 선물 자동매수 완료 여부
+  futures1530Done: boolean;
   futures1545Done: boolean;
  
   setRunning: (v: boolean) => void;
+ 
+  // 풋매도
   addEntry: (entry: AutoTradingEntry) => void;
   removeEntry: (putCode: string) => void;
   updateEntry: (putCode: string, patch: Partial<AutoTradingEntry>) => void;
   setEntryStatus: (putCode: string, status: AutoTradingEntry['status']) => void;
   updateCurrentPrice: (putCode: string, price: number) => void;
+  updateEntryBasis: (putCode: string, averageBasis: number) => void;
+  getCurrentEntries: () => AutoTradingEntry[];
+ 
+  // 콜매도
+  addCallEntry: (entry: CallTradingEntry) => void;
+  removeCallEntry: (callCode: string) => void;
+  updateCallEntry: (callCode: string, patch: Partial<CallTradingEntry>) => void;
+  setCallEntryStatus: (callCode: string, status: CallTradingEntry['status']) => void;
+  updateCallCurrentPrice: (callCode: string, price: number) => void;
+  updateCallBasis: (callCode: string, averageBasis: number) => void;
+  getCurrentCallEntries: () => CallTradingEntry[];
+ 
   addLog: (log: AutoTradingLog) => void;
   clearLogs: () => void;
   setFutures1530Done: (v: boolean) => void;
   setFutures1545Done: (v: boolean) => void;
   resetDaily: () => void;
-  getCurrentEntries: () => AutoTradingEntry[];
  
   // 자동 풋매도
   addAutoSellConfig: (config: AutoSellConfig) => void;
@@ -79,6 +116,7 @@ export const useAutoTradingStore = create<AutoTradingState>()(
     (set, get) => ({
       isRunning: false,
       entries: [],
+      callEntries: [],
       autoSellConfigs: [],
       logs: [],
       futures1530Done: false,
@@ -86,6 +124,7 @@ export const useAutoTradingStore = create<AutoTradingState>()(
  
       setRunning: (v) => set({ isRunning: v }),
  
+      // ─── 풋매도 ──────────────────────────────────────────────
       addEntry: (entry) =>
         set((s) => ({
           entries: [...s.entries.filter((e) => e.putCode !== entry.putCode), entry],
@@ -109,6 +148,61 @@ export const useAutoTradingStore = create<AutoTradingState>()(
           entries: s.entries.map((e) => e.putCode === putCode ? { ...e, currentPrice: price } : e),
         })),
  
+      updateEntryBasis: (putCode, averageBasis) =>
+        set((s) => ({
+          entries: s.entries.map((e) =>
+            e.putCode === putCode
+              ? { ...e, averageBasis, basisCalculatedAt: new Date().toLocaleTimeString('ko-KR') }
+              : e
+          ),
+        })),
+ 
+      getCurrentEntries: () => {
+        const acntNo = useAuthStore.getState().acntNo ?? '';
+        if (!acntNo) return [];
+        return get().entries.filter((e) => e.acntNo === acntNo);
+      },
+ 
+      // ─── 콜매도 ──────────────────────────────────────────────
+      addCallEntry: (entry) =>
+        set((s) => ({
+          callEntries: [...s.callEntries.filter((e) => e.callCode !== entry.callCode), entry],
+        })),
+ 
+      removeCallEntry: (callCode) =>
+        set((s) => ({ callEntries: s.callEntries.filter((e) => e.callCode !== callCode) })),
+ 
+      updateCallEntry: (callCode, patch) =>
+        set((s) => ({
+          callEntries: s.callEntries.map((e) => e.callCode === callCode ? { ...e, ...patch } : e),
+        })),
+ 
+      setCallEntryStatus: (callCode, status) =>
+        set((s) => ({
+          callEntries: s.callEntries.map((e) => e.callCode === callCode ? { ...e, status } : e),
+        })),
+ 
+      updateCallCurrentPrice: (callCode, price) =>
+        set((s) => ({
+          callEntries: s.callEntries.map((e) => e.callCode === callCode ? { ...e, currentPrice: price } : e),
+        })),
+ 
+      updateCallBasis: (callCode, averageBasis) =>
+        set((s) => ({
+          callEntries: s.callEntries.map((e) =>
+            e.callCode === callCode
+              ? { ...e, averageBasis, basisCalculatedAt: new Date().toLocaleTimeString('ko-KR') }
+              : e
+          ),
+        })),
+ 
+      getCurrentCallEntries: () => {
+        const acntNo = useAuthStore.getState().acntNo ?? '';
+        if (!acntNo) return [];
+        return get().callEntries.filter((e) => e.acntNo === acntNo);
+      },
+ 
+      // ─── 공통 ────────────────────────────────────────────────
       addLog: (log) => set((s) => ({ logs: [log, ...s.logs].slice(0, 100) })),
       clearLogs: () => set({ logs: [] }),
       setFutures1530Done: (v) => set({ futures1530Done: v }),
@@ -120,6 +214,7 @@ export const useAutoTradingStore = create<AutoTradingState>()(
           futures1530Done: false,
           futures1545Done: false,
           entries: s.entries.filter((e) => e.acntNo !== acntNo),
+          callEntries: s.callEntries.filter((e) => e.acntNo !== acntNo),
           autoSellConfigs: s.autoSellConfigs.map((c) =>
             c.acntNo === acntNo
               ? { ...c, sold: false, soldOrdNo: undefined, checked: false }
@@ -129,12 +224,7 @@ export const useAutoTradingStore = create<AutoTradingState>()(
         };
       }),
  
-      getCurrentEntries: () => {
-        const acntNo = useAuthStore.getState().acntNo ?? '';
-        return get().entries.filter((e) => e.acntNo === acntNo);
-      },
- 
-      // ─── 자동 풋매도 ────────────────────────────────────────
+      // ─── 자동 풋매도 ─────────────────────────────────────────
       addAutoSellConfig: (config) =>
         set((s) => ({
           autoSellConfigs: [
@@ -170,7 +260,6 @@ export const useAutoTradingStore = create<AutoTradingState>()(
           ),
         })),
  
-      // ✅ 스프레드 초과 시 재시도를 위한 checked 리셋
       resetAutoSellChecked: (nextWeeklyKey, acntNo) =>
         set((s) => ({
           autoSellConfigs: s.autoSellConfigs.map((c) =>
@@ -182,6 +271,7 @@ export const useAutoTradingStore = create<AutoTradingState>()(
  
       getAutoSellConfigs: () => {
         const acntNo = useAuthStore.getState().acntNo ?? '';
+        if (!acntNo) return [];
         return get().autoSellConfigs.filter((c) => c.acntNo === acntNo && c.enabled);
       },
     }),
@@ -190,6 +280,7 @@ export const useAutoTradingStore = create<AutoTradingState>()(
       storage: createJSONStorage(() => AsyncStorage),
       partialize: (state) => ({
         entries: state.entries,
+        callEntries: state.callEntries,
         autoSellConfigs: state.autoSellConfigs,
         futures1530Done: state.futures1530Done,
         futures1545Done: state.futures1545Done,

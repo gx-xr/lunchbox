@@ -11,7 +11,10 @@ import { placeFuturesOrder } from '../../services/order';
 import { AccountInfo, Position, IndexPrice, AutoOrderType } from '../../types/trading';
 import AutoMonitorCard from '../../components/AutoMonitorCard';
 import AutoSetupSheet from '../../components/AutoSetupSheet';
+import CallAutoSetupSheet from '../../components/CallAutoSetupSheet'; // ✅ 추가
 import { reinitAutoTradingStore } from '../../store/autoTradingStore';
+ 
+const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
  
 const AUTO_ORDER_ITEMS: { type: AutoOrderType; label: string }[] = [
   { type: 'KOSPI200_PUT_SELL', label: '코스피 200\n위클리 풋옵션 매도' },
@@ -24,24 +27,58 @@ function formatAmount(n: number): string {
   return n.toLocaleString('ko-KR');
 }
  
+async function fetchCurrentPrice(token: string, code: string): Promise<number> {
+  try {
+    const res = await fetch(`${BASE_URL}/futureoption/market-data`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json; charset=utf-8',
+        'authorization': `Bearer ${token}`,
+        'tr_cd': 't2111',
+        'tr_cont': 'N',
+        'tr_cont_key': '0',
+        'mac_address': '',
+      },
+      body: JSON.stringify({ t2111InBlock: { focode: code } }),
+    });
+    const data = await res.json();
+    return Number(data?.t2111OutBlock?.price ?? 0);
+  } catch {
+    return 0;
+  }
+}
+ 
 function PositionCard({
-  position, onAutoRegister, token,
+  position, onPutAutoRegister, onCallAutoRegister, token,
 }: {
   position: Position;
-  onAutoRegister: (position: Position) => void;
+  onPutAutoRegister: (position: Position) => void;
+  onCallAutoRegister: (position: Position) => void; // ✅ 추가
   token: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [liquidating, setLiquidating] = useState(false);
   const isProfit = position.evalPnl >= 0;
-  const isPutSell = position.side === 'SELL' && position.name.includes('P ');
  
-  // 청산 핸들러
+  // ✅ 풋매도 판별
+  const isPutSell = position.side === 'SELL' && (
+    position.name.startsWith('P ') ||
+    position.name.includes(' P ') ||
+    position.name.includes('풋')
+  );
+ 
+  // ✅ 콜매도 판별
+  const isCallSell = position.side === 'SELL' && (
+    position.name.startsWith('C ') ||
+    position.name.includes(' C ') ||
+    position.name.includes('콜')
+  );
+ 
   const handleLiquidate = useCallback(() => {
     const oppositeSide = position.side === 'SELL' ? '매수' : '매도';
     Alert.alert(
       '⚡ 청산',
-      `${position.name}\n${position.qty}계약 시장가 ${oppositeSide}로 청산하시겠습니까?`,
+      `${position.name}\n${position.qty}계약 지정가 ${oppositeSide}로 청산하시겠습니까?`,
       [
         { text: '아니오', style: 'cancel' },
         {
@@ -50,16 +87,21 @@ function PositionCard({
           onPress: async () => {
             setLiquidating(true);
             try {
+              const currentPrice = await fetchCurrentPrice(token, position.code);
+              if (currentPrice <= 0) {
+                Alert.alert('실패', '현재가 조회에 실패했습니다. 다시 시도해주세요.');
+                return;
+              }
               const result = await placeFuturesOrder(token, {
                 fnoIsuNo: position.code,
-                bnsTpCode: position.side === 'SELL' ? '2' : '1', // 반대 방향
-                orderType: '03', // 시장가
-                price: 0,
+                bnsTpCode: position.side === 'SELL' ? '2' : '1',
+                orderType: '00',
+                price: currentPrice,
                 qty: position.qty,
-                trdPtnCode: '03', // 청산
+                trdPtnCode: '03',
               });
               if (result.success) {
-                Alert.alert('완료', `청산 주문 접수\n주문번호: ${result.ordNo}`);
+                Alert.alert('완료', `청산 주문 접수\n주문번호: ${result.ordNo}\n가격: ${currentPrice}`);
               } else {
                 Alert.alert('실패', result.message);
               }
@@ -120,9 +162,8 @@ function PositionCard({
             ))}
           </View>
  
-          {/* 버튼 영역 */}
           <View style={styles.positionBtnRow}>
-            {/* 청산 버튼 — 항상 표시 */}
+            {/* 청산 버튼 */}
             <TouchableOpacity
               style={[styles.liquidateBtn, liquidating && styles.btnDisabled]}
               onPress={handleLiquidate}
@@ -135,11 +176,22 @@ function PositionCard({
               }
             </TouchableOpacity>
  
-            {/* 자동화 등록 — 풋옵션 매도만 */}
+            {/* ✅ 풋매도 자동화 버튼 */}
             {isPutSell && (
               <TouchableOpacity
                 style={styles.autoRegisterBtn}
-                onPress={() => onAutoRegister(position)}
+                onPress={() => onPutAutoRegister(position)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.autoRegisterText}>🤖 자동화</Text>
+              </TouchableOpacity>
+            )}
+ 
+            {/* ✅ 콜매도 자동화 버튼 */}
+            {isCallSell && (
+              <TouchableOpacity
+                style={styles.callAutoRegisterBtn}
+                onPress={() => onCallAutoRegister(position)}
                 activeOpacity={0.8}
               >
                 <Text style={styles.autoRegisterText}>🤖 자동화</Text>
@@ -176,10 +228,18 @@ export default function HomeScreen() {
   const [kosdaq150, setKosdaq150] = useState<IndexPrice | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+ 
+  // 풋매도 자동화 시트
   const [autoSheet, setAutoSheet] = useState<{
     visible: boolean; putCode: string; putName: string;
     actprice: number; currentPrice: number; market: 'KOSPI200' | 'KOSDAQ150';
   }>({ visible: false, putCode: '', putName: '', actprice: 0, currentPrice: 0, market: 'KOSPI200' });
+ 
+  // ✅ 콜매도 자동화 시트
+  const [callAutoSheet, setCallAutoSheet] = useState<{
+    visible: boolean; callCode: string; callName: string;
+    actprice: number; currentPrice: number; market: 'KOSPI200' | 'KOSDAQ150';
+  }>({ visible: false, callCode: '', callName: '', actprice: 0, currentPrice: 0, market: 'KOSPI200' });
  
   const loadData = useCallback(async () => {
     if (!token) return;
@@ -209,15 +269,27 @@ export default function HomeScreen() {
     setRefreshing(false);
   }, [loadData]);
  
-  const handleAutoRegister = useCallback((position: Position) => {
+  // 풋매도 자동화 등록
+  const handlePutAutoRegister = useCallback((position: Position) => {
     const market: 'KOSPI200' | 'KOSDAQ150' = position.name.includes('코스닥') ? 'KOSDAQ150' : 'KOSPI200';
-    const parts = position.name.trim().split(' ');
-    const actprice = parseFloat(parts[parts.length - 1].replace(/,/g, '')) || 0;
     setAutoSheet({
       visible: true,
       putCode: position.code,
       putName: position.name,
-      actprice,
+      actprice: position.actprice, // ✅ Position에서 직접 가져옴
+      currentPrice: position.avgPrice,
+      market,
+    });
+  }, []);
+ 
+  // ✅ 콜매도 자동화 등록
+  const handleCallAutoRegister = useCallback((position: Position) => {
+    const market: 'KOSPI200' | 'KOSDAQ150' = position.name.includes('코스닥') ? 'KOSDAQ150' : 'KOSPI200';
+    setCallAutoSheet({
+      visible: true,
+      callCode: position.code,
+      callName: position.name,
+      actprice: position.actprice, // ✅ Position에서 직접 가져옴
       currentPrice: position.avgPrice,
       market,
     });
@@ -267,7 +339,8 @@ export default function HomeScreen() {
               <PositionCard
                 key={`${pos.code}-${pos.side}`}
                 position={pos}
-                onAutoRegister={handleAutoRegister}
+                onPutAutoRegister={handlePutAutoRegister}
+                onCallAutoRegister={handleCallAutoRegister}
                 token={token ?? ''}
               />
             ))
@@ -299,6 +372,7 @@ export default function HomeScreen() {
         <View style={{ height: 32 }} />
       </ScrollView>
  
+      {/* 풋매도 자동화 시트 */}
       <AutoSetupSheet
         visible={autoSheet.visible}
         onClose={() => setAutoSheet(prev => ({ ...prev, visible: false }))}
@@ -307,6 +381,17 @@ export default function HomeScreen() {
         actprice={autoSheet.actprice}
         currentPrice={autoSheet.currentPrice}
         market={autoSheet.market}
+      />
+ 
+      {/* ✅ 콜매도 자동화 시트 */}
+      <CallAutoSetupSheet
+        visible={callAutoSheet.visible}
+        onClose={() => setCallAutoSheet(prev => ({ ...prev, visible: false }))}
+        callCode={callAutoSheet.callCode}
+        callName={callAutoSheet.callName}
+        actprice={callAutoSheet.actprice}
+        currentPrice={callAutoSheet.currentPrice}
+        market={callAutoSheet.market}
       />
     </>
   );
@@ -350,15 +435,10 @@ const styles = StyleSheet.create({
   detailLabel: { fontSize: 11, color: '#aaa', marginBottom: 2 },
   detailValue: { fontSize: 14, fontWeight: '600', color: '#1a1a1a' },
   positionBtnRow: { flexDirection: 'row', gap: 8 },
-  liquidateBtn: {
-    flex: 1, backgroundColor: '#f97316', borderRadius: 12,
-    paddingVertical: 12, alignItems: 'center',
-  },
+  liquidateBtn: { flex: 1, backgroundColor: '#f97316', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
   liquidateBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
-  autoRegisterBtn: {
-    flex: 1, backgroundColor: '#1a1a1a', borderRadius: 12,
-    paddingVertical: 12, alignItems: 'center',
-  },
+  autoRegisterBtn: { flex: 1, backgroundColor: '#1a1a1a', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  callAutoRegisterBtn: { flex: 1, backgroundColor: '#3182f6', borderRadius: 12, paddingVertical: 12, alignItems: 'center' }, // ✅ 파란색
   autoRegisterText: { fontSize: 14, fontWeight: '700', color: '#fff' },
   btnDisabled: { opacity: 0.5 },
   indexCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },

@@ -21,6 +21,7 @@ export interface Position {
   buyAmt: number;       // 매입금액
   evalPnl: number;      // 평가손익
   pnlRate: number;      // 수익률(%)
+  actprice: number;     // 행사가
 }
  
 export interface IndexPrice {

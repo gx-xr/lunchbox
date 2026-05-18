@@ -653,7 +653,7 @@ export async function runAutoSellCycle(): Promise<void> {
 }
  
 // ── AI 매도 사이클 (EMA 전략) ────────────────────────────────
-// ✅ 동료 Get_Ai_분석Data_조회 + EvaluateEmaStrategy 참고
+// Get_Ai_분석Data_조회 + EvaluateEmaStrategy 참고
 // t8465 분봉 200개 → EMA 계산 → Sell 신호 → 현재가 지정가 매도
 export async function runEmaAutoSellCycle(): Promise<void> {
   const store = useAutoTradingStore.getState();
@@ -748,7 +748,7 @@ export async function runEmaAutoSellCycle(): Promise<void> {
 }
  
 // ── 콜매도 자동화 사이클 ✅ ──────────────────────────────────
-// ① 자동 청산: 현재가 <= 지정 청산가
+// ① 자동 청산: 현재가 <= 지정 청산가 (0.2)
 // ② 선물 자동매도: 15:20~15:30 동시호가, 행사가 < 추정현물가
 //    매도가: offerho1 - 0.2p
 export async function runCallTradingCycle(): Promise<void> {

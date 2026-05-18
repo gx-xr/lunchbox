@@ -22,6 +22,7 @@ export default function KosdaqOptionsScreen() {
   const [board, setBoard] = useState<OptionBoardItem[]>([]);
   const [futurePrice, setFuturePrice] = useState(0);
   const [jandatecnt, setJandatecnt] = useState(0);
+  const [spotPrice, setSpotPrice] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
  
@@ -46,9 +47,23 @@ export default function KosdaqOptionsScreen() {
       const day = weekKey.slice(2) as 'MON' | 'THU';
       const filtered = codes.filter(c => c.week === week && c.weekDay === day);
       const result = await fetchKQ150OptionBoard(token, filtered);
+      console.log('jandatecnt:', result.jandatecnt);
       setBoard(result.board);
       setFuturePrice(result.futurePrice);
       setJandatecnt(result.jandatecnt);
+      // t1511 코스닥150 현물지수 (upcode: '405')
+      const spotRes = await fetch('https://openapi.ls-sec.co.kr:8080/indtp/market-data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'authorization': `Bearer ${token}`,
+          'tr_cd': 't1511', 'tr_cont': 'N', 'tr_cont_key': '0', 'mac_address': '',
+        },
+        body: JSON.stringify({ t1511InBlock: { upcode: '405' } }),
+      });
+      const spotData = await spotRes.json();
+      const sp = Number(spotData?.t1511OutBlock?.pricejisu ?? 0);
+      if (sp > 0) setSpotPrice(sp);
     } catch (e) {
       console.log('전광판 로드 에러:', e);
     }
@@ -75,6 +90,8 @@ export default function KosdaqOptionsScreen() {
       market="KOSDAQ150"
       futurePrice={futurePrice}
       futureLabel="코스닥150 선물"
+      spotPrice={spotPrice}
+      spotLabel="KQ150"
       jandatecnt={jandatecnt}
       board={board}
       weekKeys={weekKeys}

@@ -1,3 +1,4 @@
+// index.tsx
 import React, { useEffect, useState, useCallback } from 'react';
 import {
   View, Text, ScrollView, StyleSheet,
@@ -17,10 +18,10 @@ import { reinitAutoTradingStore } from '../../store/autoTradingStore';
 const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
  
 const AUTO_ORDER_ITEMS: { type: AutoOrderType; label: string }[] = [
-  { type: 'KOSPI200_PUT_SELL', label: '코스피 200\n위클리 풋옵션 매도' },
-  { type: 'KOSDAQ150_PUT_SELL', label: '코스닥 150\n위클리 풋옵션 매도' },
-  { type: 'KOSPI200_FUT_BUY', label: '코스피 200\n선물 매수' },
-  { type: 'KOSDAQ150_FUT_BUY', label: '코스닥 150\n선물 매수' },
+  { type: 'KOSPI200_PUT_SELL', label: '코스피 200\n위클리 옵션' },
+  { type: 'KOSDAQ150_PUT_SELL', label: '코스닥 150\n위클리 옵션' },
+  { type: 'KOSPI200_FUT_BUY', label: '코스피 200\n선물' },
+  { type: 'KOSDAQ150_FUT_BUY', label: '코스닥 150\n선물' },
 ];
  
 function formatAmount(n: number): string {
@@ -53,21 +54,21 @@ function PositionCard({
 }: {
   position: Position;
   onPutAutoRegister: (position: Position) => void;
-  onCallAutoRegister: (position: Position) => void; // ✅ 추가
+  onCallAutoRegister: (position: Position) => void;
   token: string;
 }) {
   const [expanded, setExpanded] = useState(false);
   const [liquidating, setLiquidating] = useState(false);
   const isProfit = position.evalPnl >= 0;
  
-  // ✅ 풋매도 판별
+  // 풋매도 판별
   const isPutSell = position.side === 'SELL' && (
     position.name.startsWith('P ') ||
     position.name.includes(' P ') ||
     position.name.includes('풋')
   );
  
-  // ✅ 콜매도 판별
+  // 콜매도 판별
   const isCallSell = position.side === 'SELL' && (
     position.name.startsWith('C ') ||
     position.name.includes(' C ') ||
@@ -145,19 +146,19 @@ function PositionCard({
         <View style={styles.positionDetail}>
           <View style={styles.detailDivider} />
           <View style={styles.detailGrid}>
-            {[
-              ['평균가', formatAmount(position.avgPrice)],
-              ['잔고', String(position.qty)],
-              ['매입금액', formatAmount(position.buyAmt)],
-              ['평가금액', formatAmount(position.evalAmt)],
-              ['평가손익', (isProfit ? '+' : '') + formatAmount(position.evalPnl)],
-              ['수익률', (isProfit ? '+' : '') + position.pnlRate.toFixed(2) + '%'],
-            ].map(([label, value]) => (
+            {([
+              ['매매단가', formatAmount(position.avgPrice), undefined],
+              ['현재가', formatAmount(position.currentPrice), '#009414'],
+              ['평균가', formatAmount(position.avgPrice), undefined],
+              ['잔고', String(position.qty), undefined],
+              ['매입금액', formatAmount(position.buyAmt), undefined],
+              ['평가금액', formatAmount(position.evalAmt), undefined],
+              ['평가손익', (isProfit ? '+' : '') + formatAmount(position.evalPnl), isProfit ? '#f04452' : '#3182f6'],
+              ['수익률', (isProfit ? '+' : '') + position.pnlRate.toFixed(2) + '%', isProfit ? '#f04452' : '#3182f6'],
+            ] as [string, string, string | undefined][]).map(([label, value, color]) => (
               <View key={label} style={styles.detailItem}>
                 <Text style={styles.detailLabel}>{label}</Text>
-                <Text style={[styles.detailValue,
-                  (label === '평가손익' || label === '수익률') ? { color: isProfit ? '#e53e3e' : '#3182f6' } : {}
-                ]}>{value}</Text>
+                <Text style={[styles.detailValue, { color: color ?? '#1a1a1a' }]}>{value}</Text>
               </View>
             ))}
           </View>
@@ -235,7 +236,7 @@ export default function HomeScreen() {
     actprice: number; currentPrice: number; market: 'KOSPI200' | 'KOSDAQ150';
   }>({ visible: false, putCode: '', putName: '', actprice: 0, currentPrice: 0, market: 'KOSPI200' });
  
-  // ✅ 콜매도 자동화 시트
+  // 콜매도 자동화 시트
   const [callAutoSheet, setCallAutoSheet] = useState<{
     visible: boolean; callCode: string; callName: string;
     actprice: number; currentPrice: number; market: 'KOSPI200' | 'KOSDAQ150';
@@ -253,7 +254,7 @@ export default function HomeScreen() {
         setPositions(acctResult.positions);
         setAcntNo(acctResult.account.acntNo);
       }
-      const indexResult = await fetchIndexPrices(token, futCode);
+      const indexResult = await fetchIndexPrices(token);
       setKospi200(indexResult.kospi200);
       setKosdaq150(indexResult.kosdaq150);
     } catch (e) {
@@ -261,7 +262,11 @@ export default function HomeScreen() {
     }
   }, [token]);
  
-  useEffect(() => { loadData().finally(() => setLoading(false)); }, [loadData]);
+  useEffect(() => { 
+    loadData().finally(() => setLoading(false));
+    const timer = setInterval(() =>{loadData(); }, 30000);
+    return () => clearInterval(timer);
+  }, [loadData]);
  
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
@@ -276,20 +281,20 @@ export default function HomeScreen() {
       visible: true,
       putCode: position.code,
       putName: position.name,
-      actprice: position.actprice, // ✅ Position에서 직접 가져옴
+      actprice: position.actprice, // Position에서 직접 가져옴
       currentPrice: position.avgPrice,
       market,
     });
   }, []);
  
-  // ✅ 콜매도 자동화 등록
+  // 콜매도 자동화 등록
   const handleCallAutoRegister = useCallback((position: Position) => {
     const market: 'KOSPI200' | 'KOSDAQ150' = position.name.includes('코스닥') ? 'KOSDAQ150' : 'KOSPI200';
     setCallAutoSheet({
       visible: true,
       callCode: position.code,
       callName: position.name,
-      actprice: position.actprice, // ✅ Position에서 직접 가져옴
+      actprice: position.actprice, // Position에서 직접 가져옴
       currentPrice: position.avgPrice,
       market,
     });
@@ -383,7 +388,7 @@ export default function HomeScreen() {
         market={autoSheet.market}
       />
  
-      {/* ✅ 콜매도 자동화 시트 */}
+      {/* 콜매도 자동화 시트 */}
       <CallAutoSetupSheet
         visible={callAutoSheet.visible}
         onClose={() => setCallAutoSheet(prev => ({ ...prev, visible: false }))}

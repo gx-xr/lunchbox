@@ -36,7 +36,7 @@ function getOptionExpiryMonths(): { yyyymm: string; label: string }[] {
     const month = cursor.getMonth();
     const firstDow = new Date(year, month, 1).getDay();
     const firstThu = firstDow <= 4 ? 5 - firstDow : 12 - firstDow;
-    const secondThu = new Date(year, month, firstThu + 7);
+    const secondThu = new Date(year, month, firstThu + 7, 23, 59, 59);
     if (today <= secondThu) {
       const mm = String(month + 1).padStart(2, '0');
       const yy = String(year).slice(2);
@@ -77,10 +77,11 @@ function MonthlyOptionBoard({
   }, [atmActprice, board.length]);
  
   const handleAction = (params: { putCode: string; actprice: number; putPrice: number; optionType: 'PUT' | 'CALL'; side: 'BUY' | 'SELL'; isuNm?: string; }) => {
+    //console.log('jandatecnt:', jandatecnt); // 월물옵션 잔여일 확인
     setSheetVisible(false);
     const mktLabel = market === 'KP200' ? '코스피200' : '코스닥150';
     const optLabel = params.optionType === 'CALL' ? '콜옵션' : '풋옵션';
-    router.push({ pathname: '/order/put-order', params: { putCode: params.putCode, actprice: String(params.actprice), putPrice: String(params.putPrice), market: market === 'KP200' ? 'KOSPI200' : 'KOSDAQ150', optionType: params.optionType, side: params.side, isuNm: params.isuNm ?? `${mktLabel} ${optLabel} ${params.actprice}` } });
+    router.push({ pathname: '/order/put-order', params: { putCode: params.putCode, actprice: String(params.actprice), putPrice: String(params.putPrice), market: market === 'KP200' ? 'KOSPI200' : 'KOSDAQ150', optionType: params.optionType, side: params.side, isuNm: params.isuNm ?? `${mktLabel} ${optLabel} ${params.actprice}`, jandatecnt: String(jandatecnt) } });
   };
  
   if (loading) return <ActivityIndicator size="large" color="#3182f6" style={{ marginTop: 40 }} />;
@@ -290,7 +291,7 @@ function KP200WeeklyTab({ token }: { token: string }) {
  
   return (
     <OptionBoardScreen
-      market="KOSPI200" futurePrice={futurePrice} futureLabel="선물"
+      market="KOSPI200" futurePrice={futurePrice} futureLabel="코스피200 선물"
       spotPrice={spotPrice} spotLabel="KOSPI200" jandatecnt={jandatecnt} board={board}
       weekKeys={weekKeys} selectedWeekKey={selectedWeekKey} loading={loading} refreshing={refreshing}
       weekTab={weekTab} onWeekTabChange={setWeekTab} onWeekKeyChange={handleWeekKeyChange} onRefresh={onRefresh}

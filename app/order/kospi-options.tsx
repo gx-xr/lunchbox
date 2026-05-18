@@ -81,7 +81,7 @@ export default function KospiOptionsScreen() {
     <OptionBoardScreen
       market="KOSPI200"
       futurePrice={futurePrice}
-      futureLabel="선물"
+      futureLabel="코스피200 선물"
       spotPrice={spotPrice}
       spotLabel="KOSPI200"
       jandatecnt={jandatecnt}

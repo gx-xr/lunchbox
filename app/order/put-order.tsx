@@ -1,6 +1,6 @@
 /**
  * app/order/put-order.tsx
- * 옵션 주문 화면 — 호가창 + 주문 입력 통합
+ * 옵션 주문 화면 — futures.tsx 카드 레이아웃 스타일
  * ✅ 지정가 고정 (시장가 제거)
  */
 import React, { useState, useEffect, useCallback } from 'react';
@@ -9,7 +9,7 @@ import {
   TextInput, ScrollView, Alert, ActivityIndicator,
   Modal, KeyboardAvoidingView, Platform,
 } from 'react-native';
-import { useLocalSearchParams, useRouter } from 'expo-router';
+import { useLocalSearchParams, useRouter, useNavigation } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/authStore';
 import { placeFuturesOrder, calcMaxQty, fetchFuturesOrders } from '../../services/order';
@@ -24,9 +24,11 @@ interface HogaLevel {
  
 export default function PutOrderScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const {
     putCode, actprice, putPrice, weekKey, market,
     optionType, side, isuNm,
+    jandatecnt: jandatecntParam,
   } = useLocalSearchParams<{
     putCode: string;
     actprice: string;
@@ -36,6 +38,7 @@ export default function PutOrderScreen() {
     optionType?: 'PUT' | 'CALL';
     side?: 'BUY' | 'SELL';
     isuNm?: string;
+    jandatecnt?: string;
   }>();
   const token = useAuthStore((s) => s.token);
  
@@ -44,6 +47,20 @@ export default function PutOrderScreen() {
   const optionLabel = isCall ? '콜옵션' : '풋옵션';
   const sideLabel = isSell ? '매도' : '매수';
   const sideColor = isSell ? '#3182f6' : '#f04452';
+ 
+  const actPrice = Number(actprice ?? 0);
+  const marketName = market === 'KOSPI200' ? '코스피200' : '코스닥150';
+  const multiplier = market === 'KOSPI200' ? 250000 : 10000;
+  const spotLabel = market === 'KOSPI200' ? 'KP200' : 'KQ150';
+  const upcode = market === 'KOSPI200' ? '101' : '405';
+ 
+  // weekKey (예: W3MON, W3THU) → "W3 월" / "W3 목"
+  const weekLabel = weekKey
+    ? weekKey
+        .replace(/^\d{6}_/, '') // 앞에 202605_ 제거
+        .replace(/^(W\d)(MON|THU)$/, (_, w, d) => `${w} ${d === 'MON' ? '월' : '목'}`)
+    : '';
+  const symbolName = `${spotLabel} ${isCall ? 'C' : 'P'} ${weekLabel} ${actPrice > 0 ? actPrice.toLocaleString() : ''}`.trim();
  
   const [qty, setQty] = useState('1');
   const [price, setPrice] = useState(putPrice ?? '0');
@@ -60,9 +77,41 @@ export default function PutOrderScreen() {
   const [hogaLoading, setHogaLoading] = useState(true);
   const [currentPrice, setCurrentPrice] = useState(Number(putPrice ?? 0));
  
-  const actPrice = Number(actprice ?? 0);
-  const marketName = market === 'KOSPI200' ? '코스피200' : '코스닥150';
-  const multiplier = market === 'KOSPI200' ? 250000 : 10000;
+  // 현물지수
+  const [spotPrice, setSpotPrice] = useState(0);
+  const [spotChange, setSpotChange] = useState(0);
+  const [spotChangeRate, setSpotChangeRate] = useState(0);
+  const [spotIsUp, setSpotIsUp] = useState(true);
+  const jandatecnt = Number(jandatecntParam ?? 0);
+ 
+  // ── 현물지수 조회 ──
+  const loadSpotPrice = useCallback(async () => {
+    if (!token) return;
+    try {
+      const res = await fetch('https://openapi.ls-sec.co.kr:8080/indtp/market-data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'authorization': `Bearer ${token}`,
+          'tr_cd': 't1511', 'tr_cont': 'N', 'tr_cont_key': '0', 'mac_address': '',
+        },
+        body: JSON.stringify({ t1511InBlock: { upcode } }),
+      });
+      const data = await res.json();
+      const b = data?.t1511OutBlock;
+      if (b) {
+        const sp = Number(b.pricejisu ?? 0);
+        const ch = Number(b.change ?? 0);
+        const cr = Number(b.diffjisu ?? 0);
+        const sign = String(b.sign ?? '3');
+        const isUp = sign === '1' || sign === '2';
+        setSpotPrice(sp);
+        setSpotChange(isUp ? Math.abs(ch) : -Math.abs(ch));
+        setSpotChangeRate(isUp ? Math.abs(cr) : -Math.abs(cr));
+        setSpotIsUp(isUp);
+      }
+    } catch {}
+  }, [token, upcode]);
  
   useEffect(() => {
     if (!token) return;
@@ -73,7 +122,14 @@ export default function PutOrderScreen() {
         setMaxQty(calcMaxQty(amt, currentPrice, market ?? 'KOSPI200'));
       }
     });
+    loadSpotPrice();
   }, [token]);
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerTitle: `${optionLabel} ${sideLabel}`,
+    });
+  }, [optionLabel, sideLabel]);
  
   const loadHoga = useCallback(async () => {
     if (!token || !putCode) return;
@@ -84,7 +140,7 @@ export default function PutOrderScreen() {
         setBids(data.bids.filter(b => b.price > 0));
         if (data.bids[0]?.price > 0) {
           setCurrentPrice(data.bids[0].price);
-        }
+        }        
       }
     } catch {}
     setHogaLoading(false);
@@ -126,7 +182,7 @@ export default function PutOrderScreen() {
       const result = await placeFuturesOrder(token, {
         fnoIsuNo: putCode,
         bnsTpCode: isSell ? '1' : '2',
-        orderType: '00', // 지정가 고정
+        orderType: '00',
         price: Number(price),
         qty: Number(qty),
         trdPtnCode: '00',
@@ -135,18 +191,12 @@ export default function PutOrderScreen() {
         setOrdNo(result.ordNo ?? '');
  
         if (isSell && !isCall) {
-          // ✅ 체결 확인 후 자동화 시트 오픈 (최대 5초 대기)
           let checked = false;
-          for (let i = 0; i < 5; i++) {
+          for (let i = 0; i < 10; i++) {
             await new Promise(r => setTimeout(r, 1000));
-            const orders = await fetchFuturesOrders(token, '1'); // 1: 체결만
-            const matched = orders.find(o =>
-              o.expcode === putCode && o.cheqty > 0
-            );
-            if (matched) {
-              checked = true;
-              break;
-            }
+            const orders = await fetchFuturesOrders(token, '1');
+            const matched = orders.find(o => o.expcode === putCode && o.cheqty > 0);
+            if (matched) { checked = true; break; }
           }
           if (checked) {
             setAutoSheetVisible(true);
@@ -175,93 +225,98 @@ export default function PutOrderScreen() {
   }
  
   const estimatedMargin = Number(qty) * Number(price) * multiplier;
-  const maxQty2 = asks.length > 0 ? Math.max(...asks.map(a => a.qty)) : 1;
-  const maxBidQty = bids.length > 0 ? Math.max(...bids.map(b => b.qty)) : 1;
+  const maxHogaQty = Math.max(...asks.map(a => a.qty), ...bids.map(b => b.qty), 1);
+  const spotChangeColor = spotIsUp ? '#f04452' : '#3182f6';
  
   return (
     <SafeAreaView style={s.safe} edges={['bottom']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView style={s.scroll} keyboardShouldPersistTaps="handled">
  
-        {/* 헤더 */}
-        <View style={s.header}>
-          <View>
-            <Text style={s.headerTitle}>
-              {isuNm ? isuNm : `${marketName} ${optionLabel}`}
-            </Text>
-            <Text style={s.headerSub}>
-              {actPrice > 0 ? `행사가 ${actPrice.toLocaleString()} · ` : ''}{putCode}
-            </Text>
-          </View>
-          <View style={s.headerRight}>
-            <Text style={[s.headerPrice, { color: sideColor }]}>{currentPrice.toFixed(2)}</Text>
-            <View style={[s.sideBadge, { backgroundColor: isSell ? '#eff6ff' : '#fff1f0' }]}>
-              <Text style={[s.sideBadgeText, { color: sideColor }]}>{sideLabel}</Text>
+          {/* ── 종목 정보 카드 ── */}
+          <View style={s.card}>
+            <View style={s.rowBetween}>
+              <View style={{ flex: 1, marginRight: 12 }}>
+                <Text style={s.symbolName}>{symbolName}</Text>
+                <Text style={s.symbolCode}>{putCode}</Text>
+                {spotPrice > 0 && (
+                  <View style={s.spotRow}>
+                    <Text style={s.spotLabel}>{spotLabel}</Text>
+                    <Text style={[s.spotPrice, { color: spotChangeColor }]}>
+                      {spotPrice.toFixed(2)}
+                    </Text>
+                    <Text style={[s.spotChange, { color: spotChangeColor }]}>
+                      {spotIsUp ? '▲' : '▼'} {Math.abs(spotChange).toFixed(2)}{'  '}{spotIsUp ? '' : '-'}{Math.abs(spotChangeRate).toFixed(2)}%
+                    </Text>
+                  </View>
+                )}
+              </View>
+              <View style={{ alignItems: 'flex-end', gap: 4 }}>
+                <Text style={[s.currentPrice, { color: sideColor }]}>
+                  {currentPrice.toFixed(2)}
+                </Text>
+                <View style={[s.sideBadge, { backgroundColor: isSell ? '#eff6ff' : '#fff1f0' }]}>
+                  <Text style={[s.sideBadgeText, { color: sideColor }]}>{sideLabel}</Text>
+                </View>
+              </View>
             </View>
+            {jandatecnt > 0 && (
+              <View style={s.infoTagRow}>
+                <View style={s.infoTag}>
+                  <Text style={s.infoTagText}>잔여 <Text style={{ color: '#f04452' }}>{jandatecnt}</Text>일</Text>
+                </View>
+              </View>
+            )}
           </View>
-        </View>
  
-        <ScrollView style={{ flex: 1 }} keyboardShouldPersistTaps="handled" showsVerticalScrollIndicator={false}>
- 
-          {/* 호가창 */}
-          <View style={s.hogaCard}>
-            <View style={s.hogaHeader}>
-              <Text style={s.hogaHeaderText}>잔량</Text>
-              <Text style={[s.hogaHeaderText, { color: '#3182f6' }]}>매도호가</Text>
-              <Text style={[s.hogaHeaderText, { color: '#e53e3e', textAlign: 'right' }]}>매수호가</Text>
-              <Text style={[s.hogaHeaderText, { textAlign: 'right' }]}>잔량</Text>
-            </View>
+          {/* ── 호가창 카드 ── */}
+          <View style={s.card}>
+            <Text style={s.sectionTitle}>
+              호가{'  '}<Text style={s.hogaHint}>눌러서 주문가격 입력</Text>
+            </Text>
  
             {hogaLoading ? (
-              <View style={s.hogaLoading}>
-                <ActivityIndicator size="small" color="#3182f6" />
-              </View>
+              <Text style={s.hogaEmpty}>호가 불러오는 중...</Text>
+            ) : asks.length === 0 && bids.length === 0 ? (
+              <Text style={s.hogaEmpty}>장중에만 호가가 표시됩니다</Text>
             ) : (
               <>
-                {asks.map((ask, i) => (
-                  <TouchableOpacity
-                    key={`ask-${i}`}
-                    style={s.hogaRow}
-                    onPress={() => handleHogaPress(ask.price)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={s.hogaQtyCell}>
-                      <View style={[s.hogaBarAsk, { width: `${Math.min(100, (ask.qty / maxQty2) * 100)}%` }]} />
-                      <Text style={s.hogaQtyText}>{ask.qty}</Text>
+                {asks.map((row, i) => (
+                  <TouchableOpacity key={`ask-${i}`} style={s.hogaRow} onPress={() => handleHogaPress(row.price)} activeOpacity={0.7}>
+                    <View style={s.hogaSide}>
+                      <View style={[s.hogaBarBg, { backgroundColor: '#eff6ff' }]}>
+                        <View style={[s.hogaBarFillRight, { width: `${(row.qty / maxHogaQty) * 100}%` as any, backgroundColor: '#bfdbfe' }]} />
+                      </View>
+                      <Text style={[s.hogaQty, { color: '#3182f6' }]}>{row.qty}</Text>
                     </View>
-                    <Text style={[s.hogaPrice, { color: '#3182f6' }]}>{ask.price.toFixed(2)}</Text>
-                    <Text style={s.hogaPrice}></Text>
-                    <View style={s.hogaQtyCell} />
+                    <Text style={[s.hogaPrice, { color: '#3182f6' }]}>{row.price.toFixed(2)}</Text>
+                    <View style={s.hogaSide} />
                   </TouchableOpacity>
                 ))}
  
-                <View style={s.hogaDivider}>
-                  <Text style={[s.hogaDividerText, { color: sideColor }]}>
-                    현재가 {currentPrice.toFixed(2)}
+                <View style={[s.currentBar, { borderColor: sideColor }]}>
+                  <Text style={[s.currentBarTxt, { color: sideColor }]}>
+                    현재가  {currentPrice.toFixed(2)}
                   </Text>
                 </View>
  
-                {bids.map((bid, i) => (
-                  <TouchableOpacity
-                    key={`bid-${i}`}
-                    style={s.hogaRow}
-                    onPress={() => handleHogaPress(bid.price)}
-                    activeOpacity={0.7}
-                  >
-                    <View style={s.hogaQtyCell} />
-                    <Text style={s.hogaPrice}></Text>
-                    <Text style={[s.hogaPrice, { color: '#e53e3e', textAlign: 'right' }]}>{bid.price.toFixed(2)}</Text>
-                    <View style={[s.hogaQtyCell, { alignItems: 'flex-end' }]}>
-                      <View style={[s.hogaBarBid, { width: `${Math.min(100, (bid.qty / maxBidQty) * 100)}%` }]} />
-                      <Text style={[s.hogaQtyText, { textAlign: 'right' }]}>{bid.qty}</Text>
+                {bids.map((row, i) => (
+                  <TouchableOpacity key={`bid-${i}`} style={s.hogaRow} onPress={() => handleHogaPress(row.price)} activeOpacity={0.7}>
+                    <View style={s.hogaSide} />
+                    <Text style={[s.hogaPrice, { color: '#f04452' }]}>{row.price.toFixed(2)}</Text>
+                    <View style={s.hogaSide}>
+                      <Text style={[s.hogaQty, { color: '#f04452' }]}>{row.qty}</Text>
+                      <View style={[s.hogaBarBg, { backgroundColor: '#fff1f2' }]}>
+                        <View style={[s.hogaBarFill, { width: `${(row.qty / maxHogaQty) * 100}%` as any, backgroundColor: '#fecdd3' }]} />
+                      </View>
                     </View>
                   </TouchableOpacity>
                 ))}
               </>
             )}
-            <Text style={s.hogaHint}>호가를 누르면 가격이 자동입력됩니다</Text>
           </View>
  
-          {/* 주문가능금액 */}
+          {/* ── 주문가능금액 카드 ── */}
           <View style={s.card}>
             <View style={s.infoRow}>
               <Text style={s.infoLabel}>주문가능금액</Text>
@@ -269,13 +324,16 @@ export default function PutOrderScreen() {
             </View>
             <View style={s.infoRow}>
               <Text style={s.infoLabel}>최대 주문 가능</Text>
-              <Text style={s.infoValue}>{maxQty}계약</Text>
+              <Text style={s.infoValue}>{maxQty > 0 ? `${maxQty}계약` : '잔고 부족'}</Text>
+            </View>
+            <View style={s.infoRow}>
+              <Text style={s.infoLabel}>계약승수</Text>
+              <Text style={s.infoValue}>{multiplier.toLocaleString()}원</Text>
             </View>
           </View>
  
-          {/* 주문 입력 — 지정가 고정 */}
+          {/* ── 주문 입력 카드 ── */}
           <View style={s.card}>
-            {/* 수량 */}
             <Text style={s.inputLabel}>수량 (계약)</Text>
             <View style={s.inputRow}>
               <TouchableOpacity style={s.adjBtn} onPress={() => adjustQty(-1)}>
@@ -310,7 +368,6 @@ export default function PutOrderScreen() {
               )}
             </View>
  
-            {/* 가격 — 지정가 고정 */}
             <Text style={s.inputLabel}>가격 (지정가)</Text>
             <View style={s.inputRow}>
               <TouchableOpacity style={s.adjBtn} onPress={() => adjustPrice(-1)}>
@@ -325,7 +382,9 @@ export default function PutOrderScreen() {
               </TouchableOpacity>
             </View>
             <TouchableOpacity style={s.resetBtn} onPress={() => setPrice(String(currentPrice))}>
-              <Text style={s.resetText}>현재가로 초기화 ({currentPrice.toFixed(2)})</Text>
+              <Text style={[s.resetText, { color: sideColor }]}>
+                현재가로 초기화 ({currentPrice.toFixed(2)})
+              </Text>
             </TouchableOpacity>
  
             <View style={s.totalRow}>
@@ -337,7 +396,6 @@ export default function PutOrderScreen() {
           <View style={{ height: 16 }} />
         </ScrollView>
  
-        {/* 주문 버튼 */}
         <View style={s.footer}>
           <TouchableOpacity
             style={[s.orderBtn, { backgroundColor: sideColor }, loading && s.disabled]}
@@ -353,13 +411,12 @@ export default function PutOrderScreen() {
         </View>
       </KeyboardAvoidingView>
  
-      {/* 주문 확인 모달 */}
       <Modal transparent visible={confirmVisible} animationType="fade">
         <View style={s.overlay}>
           <View style={s.modal}>
             <Text style={s.modalTitle}>주문 확인</Text>
             {[
-              ['종목', `${marketName} ${optionLabel} ${actPrice.toLocaleString()}`],
+              ['종목', symbolName],
               ['구분', `${sideLabel} · 신규`],
               ['유형', '지정가'],
               ['수량', `${qty}계약`],
@@ -383,7 +440,6 @@ export default function PutOrderScreen() {
         </View>
       </Modal>
  
-      {/* 자동화 설정 바텀시트 */}
       <AutoSetupSheet
         visible={autoSheetVisible}
         onClose={() => { setAutoSheetVisible(false); router.back(); }}
@@ -400,58 +456,38 @@ export default function PutOrderScreen() {
  
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f5f6f8' },
-  header: {
-    flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center',
-    backgroundColor: '#fff', paddingHorizontal: 20, paddingVertical: 14,
-    borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
-  },
-  headerTitle: { fontSize: 15, fontWeight: '800', color: '#1a1a1a' },
-  headerSub: { fontSize: 11, color: '#aaa', marginTop: 2 },
-  headerRight: { alignItems: 'flex-end', gap: 4 },
-  headerPrice: { fontSize: 22, fontWeight: '800' },
-  sideBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8 },
-  sideBadgeText: { fontSize: 12, fontWeight: '700' },
-  hogaCard: {
-    backgroundColor: '#fff', marginHorizontal: 0, marginBottom: 8,
-    borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
-  },
-  hogaHeader: {
-    flexDirection: 'row', paddingHorizontal: 16, paddingVertical: 8,
-    backgroundColor: '#f9fafb', borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
-  },
-  hogaHeaderText: { flex: 1, fontSize: 11, fontWeight: '700', color: '#888' },
-  hogaLoading: { height: 120, justifyContent: 'center', alignItems: 'center' },
-  hogaRow: {
-    flexDirection: 'row', alignItems: 'center',
-    paddingHorizontal: 16, paddingVertical: 7,
-    borderBottomWidth: 1, borderBottomColor: '#fafafa',
-  },
-  hogaQtyCell: { flex: 1, position: 'relative', height: 20, justifyContent: 'center' },
-  hogaBarAsk: {
-    position: 'absolute', left: 0, top: 2, bottom: 2,
-    backgroundColor: '#dbeafe', borderRadius: 2,
-  },
-  hogaBarBid: {
-    position: 'absolute', right: 0, top: 2, bottom: 2,
-    backgroundColor: '#fee2e2', borderRadius: 2,
-  },
-  hogaQtyText: { fontSize: 12, color: '#666', fontWeight: '600', zIndex: 1 },
-  hogaPrice: { flex: 1, fontSize: 14, fontWeight: '700', color: '#1a1a1a' },
-  hogaDivider: {
-    paddingHorizontal: 16, paddingVertical: 6,
-    backgroundColor: '#f5f6f8', borderTopWidth: 1, borderBottomWidth: 1,
-    borderColor: '#e0e0e0', alignItems: 'center',
-  },
-  hogaDividerText: { fontSize: 12, fontWeight: '700' },
-  hogaHint: {
-    textAlign: 'center', fontSize: 10, color: '#ccc',
-    paddingVertical: 6, paddingBottom: 8,
-  },
+  scroll: { flex: 1, padding: 16 },
   card: {
-    backgroundColor: '#fff', padding: 18, marginBottom: 8,
-    borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
+    backgroundColor: '#fff', borderRadius: 16, padding: 18, marginBottom: 12,
+    shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 10,
+    shadowOffset: { width: 0, height: 2 }, elevation: 2,
   },
-  infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 5 },
+  rowBetween: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
+  symbolName: { fontSize: 16, fontWeight: '800', color: '#1a1a1a', marginBottom: 6 },
+  symbolCode: { fontSize: 12, color: '#aaa', marginBottom: 4 },
+  spotRow: { flexDirection: 'row', alignItems: 'center', gap: 6, marginTop: 4 },
+  spotLabel: { fontSize: 11, color: '#aaa', fontWeight: '700' },
+  spotPrice: { fontSize: 13, fontWeight: '800' },
+  spotChange: { fontSize: 12, fontWeight: '600' },
+  currentPrice: { fontSize: 26, fontWeight: '800' },
+  sideBadge: { paddingHorizontal: 10, paddingVertical: 3, borderRadius: 8, marginTop: 4 },
+  sideBadgeText: { fontSize: 12, fontWeight: '700' },
+  infoTagRow: { flexDirection: 'row', gap: 6, marginTop: 12, flexWrap: 'wrap' },
+  infoTag: { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: '#f5f6f8', borderRadius: 8 },
+  infoTagText: { fontSize: 11, fontWeight: '700', color: '#888' },
+  sectionTitle: { fontSize: 13, fontWeight: '700', color: '#888', marginBottom: 10 },
+  hogaHint: { fontSize: 11, color: '#bbb', fontWeight: '400' },
+  hogaEmpty: { fontSize: 13, color: '#bbb', textAlign: 'center', paddingVertical: 16 },
+  hogaRow: { flexDirection: 'row', alignItems: 'center', paddingVertical: 4 },
+  hogaSide: { flex: 1, flexDirection: 'row', alignItems: 'center', gap: 4 },
+  hogaPrice: { width: 72, fontSize: 14, fontWeight: '700', textAlign: 'center' },
+  hogaQty: { fontSize: 12, width: 28, textAlign: 'center' },
+  hogaBarBg: { flex: 1, height: 18, borderRadius: 3, overflow: 'hidden' },
+  hogaBarFill: { position: 'absolute', top: 0, bottom: 0, left: 0, borderRadius: 3 },
+  hogaBarFillRight: { position: 'absolute', top: 0, bottom: 0, right: 0, borderRadius: 3 },
+  currentBar: { borderWidth: 1, borderRadius: 8, padding: 6, alignItems: 'center', marginVertical: 6 },
+  currentBarTxt: { fontSize: 13, fontWeight: '800' },
+  infoRow: { flexDirection: 'row', justifyContent: 'space-between', paddingVertical: 6 },
   infoLabel: { fontSize: 13, color: '#888' },
   infoValue: { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
   inputLabel: { fontSize: 12, color: '#aaa', fontWeight: '600', marginBottom: 8 },
@@ -463,11 +499,11 @@ const s = StyleSheet.create({
   quickBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 8, backgroundColor: '#f5f6f8' },
   quickText: { fontSize: 13, fontWeight: '600', color: '#888' },
   resetBtn: { alignItems: 'center', marginBottom: 12 },
-  resetText: { fontSize: 12, color: '#3182f6', fontWeight: '600' },
+  resetText: { fontSize: 12, fontWeight: '600' },
   totalRow: { flexDirection: 'row', justifyContent: 'space-between', paddingTop: 14, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
   totalLabel: { fontSize: 13, color: '#888' },
   totalValue: { fontSize: 16, fontWeight: '800', color: '#1a1a1a' },
-  footer: { padding: 16, paddingBottom: 24, backgroundColor: '#fff', borderTopWidth: 1, borderTopColor: '#f0f0f0' },
+  footer: { padding: 16, paddingBottom: 24, backgroundColor: '#f5f6f8' },
   orderBtn: { borderRadius: 14, paddingVertical: 18, alignItems: 'center' },
   disabled: { opacity: 0.6 },
   orderBtnText: { color: '#fff', fontSize: 16, fontWeight: '800' },

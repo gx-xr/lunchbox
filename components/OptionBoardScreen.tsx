@@ -150,6 +150,7 @@ export default function OptionBoardScreen({
         market,
         optionType: params.optionType,
         side: params.side,
+        jandatecnt: String(jandatecnt),
       },
     });
   };
@@ -246,10 +247,10 @@ export default function OptionBoardScreen({
                   </Text>
                 </TouchableOpacity>
                 {/* 행사가 */}
-                <TouchableOpacity style={[s.actpriceCell, isATM && s.atmCell]} onPress={() => { setSelectedItem(item); setClickedSide(null); setSheetVisible(true); }} activeOpacity={0.7}>
+                <View style={[s.actpriceCell, isATM && s.atmCell]} >
                   <Text style={[s.actpriceText, isATM && s.atmText]}>{item.actprice.toLocaleString()}</Text>
                   {isATM && <Text style={s.atmBadge}>ATM</Text>}
-                </TouchableOpacity>
+                </View>
                 {/* 풋 가격 */}
                 <TouchableOpacity style={{ flex: 1.2 }} onPress={() => { setSelectedItem(item); setClickedSide('PUT'); setSheetVisible(true); }} activeOpacity={0.6}>
                   <Text style={[s.cell, { color: putColor, fontWeight: '700', textAlign: 'right' }]}>

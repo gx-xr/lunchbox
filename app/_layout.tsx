@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
- 
+
+
 export default function RootLayout() {
   return (
     <>
@@ -13,7 +14,7 @@ export default function RootLayout() {
           name="order/kosdaq-options"
           options={{
             headerShown: true,
-            headerTitle: '코스닥150 위클리 풋옵션',
+            headerTitle: '코스닥150 위클리 옵션',
             headerBackTitle: '뒤로',
             headerStyle: { backgroundColor: '#fff' },
             headerTintColor: '#1a1a1a',
@@ -24,7 +25,7 @@ export default function RootLayout() {
           name="order/kospi-options"
           options={{
             headerShown: true,
-            headerTitle: '코스피200 위클리 풋옵션',
+            headerTitle: '코스피200 위클리 옵션',
             headerBackTitle: '뒤로',
             headerStyle: { backgroundColor: '#fff' },
             headerTintColor: '#1a1a1a',
@@ -46,7 +47,7 @@ export default function RootLayout() {
           name="order/futures"
           options={{
             headerShown: true,
-            headerTitle: '선물 매수',
+            headerTitle: '선물 매매',
             headerBackTitle: '뒤로',
             headerStyle: { backgroundColor: '#fff' },
             headerTintColor: '#1a1a1a',

@@ -1,3 +1,5 @@
+// options.ts 
+
 const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
  
 const postApi = async (token: string, path: string, trCd: string, body: object) => {
@@ -45,6 +47,7 @@ export interface OptionBoardResult {
 function calcJandatecnt(weekNum: number, weekDay: 'MON' | 'THU'): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
+  console.log('calcJandatecnt 호출:', weekNum, weekDay);
   const targetDay = weekDay === 'MON' ? 1 : 4;
  
   for (let monthOffset = 0; monthOffset <= 1; monthOffset++) {
@@ -60,6 +63,8 @@ function calcJandatecnt(weekNum: number, weekDay: 'MON' | 'THU'): number {
         if (count === weekNum) {
           if (date < today) break;
           const diff = Math.ceil((date.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          console.log('diff:', diff, 'date:', date.toISOString());
+          console.log('today:', today.toISOString(), 'date:', date.toISOString(), 'diff:', diff);
           return Math.max(0, diff);
         }
       }
@@ -121,6 +126,7 @@ export async function fetchKQ150WeeklyCodes(token: string): Promise<WeeklyOption
       t8435InBlock: { gubun: 'QW' },
     });
     const list: any[] = data?.t8435OutBlock ?? [];
+    //console.log('[t8435 QW raw]', list.map(i => i.hname));
     return list.map((item: any) => {
       const hname: string = item.hname ?? '';
       const weekDayChar = hname.substring(5, 6).trim();
@@ -225,7 +231,7 @@ export async function fetchKP200ValidWeeklyKeys(token: string): Promise<{
       const puts: any[] = data?.t2301OutBlock2 ?? [];
       if (puts.length > 0) {
         validKeys.push({ key: candidate.key, yyyymm: candidate.yyyymm, label: candidate.label });
-        // ★ 첫 번째 유효 탭의 board 데이터를 바로 파싱해서 저장
+        // 첫 번째 유효 탭의 board 데이터를 바로 파싱해서 저장
         if (firstBoard === null) {
           firstBoard = parseWeeklyBoardResponse(data, candidate.yyyymm);
           console.log('[KP200 첫 board 재사용] yyyymm:', candidate.yyyymm, '행:', firstBoard.board.length);
@@ -295,14 +301,15 @@ export async function fetchOptionBoardFromCodes(
       .filter(item => item.actprice > 0)
       .sort((a, b) => b.actprice - a.actprice);
     let futurePrice = 0;
+    let jandatecnt = 0;
     if (futureCode) {
       const priceData = await postApi(token, '/futureoption/market-data', 't2111', { t2111InBlock: { focode: futureCode } });
       futurePrice = Number(priceData?.t2111OutBlock?.price ?? 0);
+      console.log('bjandatecnt:', priceData?.t2111OutBlock?.bjandatecnt);
     }
-    let jandatecnt = 0;
     if (codes.length > 0) {
-      const sample = codes[0];
-      jandatecnt = calcJandatecnt(parseInt(sample.week.slice(1)), sample.weekDay);
+      const optData = await postApi(token, '/futureoption/market-data', 't2111', { t2111InBlock: { focode: codes[0].shcode } });
+      jandatecnt = Number(optData?.t2111OutBlock?.bjandatecnt ?? 0);
     }
     return { board, futurePrice, jandatecnt };
   } catch (e) {

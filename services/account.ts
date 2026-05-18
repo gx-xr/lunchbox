@@ -16,7 +16,7 @@ const postApi = async (token: string, path: string, trCd: string, body: object) 
     body: JSON.stringify(body),
   });
   const data = await res.json();
-  console.log(`[${trCd}] 응답:`, JSON.stringify(data).slice(0, 300));
+  //console.log(`[${trCd}] 응답:`, JSON.stringify(data).slice(0, 300));
   return data;
 };
  
@@ -47,7 +47,7 @@ export async function fetchAccountAndPositions(token: string): Promise<{
     const isSuccess = acntData.rsp_cd === '00000' || acntData.rsp_cd?.startsWith('001');
  
     if (isSuccess) {
-      // ✅ 실계좌: CFOAQ50600에서 모두 가져옴
+      // 실계좌: CFOAQ50600에서 모두 가져옴
       acntNo = String(acntData.CFOAQ50600OutBlock1?.AcntNo ?? '');
       acntNm = String(acntData.CFOAQ50600OutBlock2?.AcntNm ?? '');
       ordAblAmt = Number(acntData.CFOAQ50600OutBlock2?.MnyOrdAbleAmt ?? 0);
@@ -59,7 +59,7 @@ export async function fetchAccountAndPositions(token: string): Promise<{
       positions = posList
         .filter((r: any) => Number(r.UnsttQty ?? 0) > 0)
         .map((r: any) => {
-          // ✅ 실계좌: IsuNm에서 행사가 파싱 (예: "코스닥위클리 P 2604W5 2,000" → 2000)
+          // 실계좌: IsuNm에서 행사가 파싱 (예: "코스닥위클리 P 2604W5 2,000" → 2000)
           const isuNm = String(r.IsuNm ?? '');
           const parts = isuNm.trim().split(' ');
           const parsedActprice = parseFloat(parts[parts.length - 1].replace(/,/g, '')) || 0;
@@ -73,17 +73,29 @@ export async function fetchAccountAndPositions(token: string): Promise<{
             buyAmt: Number(r.FnoAvrPrc ?? 0) * Number(r.UnsttQty ?? 0),
             evalPnl: Number(r.EvalPnl ?? 0),
             pnlRate: Number(r.PnlRat ?? 0),
-            actprice: parsedActprice, // ✅ 종목명에서 파싱
+            actprice: parsedActprice,
+            currentPrice: Number(r.price ?? 0),
           };
         });
  
-      console.log('[CFOAQ50600] 실계좌 조회 성공:', acntNo, '포지션:', positions.length);
+      // t0441로 현재가 merge
+      const t0441Data = await postApi(token, '/futureoption/accno', 't0441', {
+        t0441InBlock: { cts_expcode: '', cts_medocd: '' },
+      });
+      const priceList: any[] = Array.isArray(t0441Data.t0441OutBlock1) ? t0441Data.t0441OutBlock1 : [];
+
+      positions = positions.map(pos => {
+        const match = priceList.find(r => String(r.expcode) === pos.code);
+        return { ...pos, currentPrice: match ? Number(match.price) : 0 };
+      });
+      
+      //console.log('[CFOAQ50600] 실계좌 조회 성공:', acntNo, '포지션:', positions.length);
  
     } else {
-      // ✅ 모의계좌: CFOAQ50600 실패 → CFOAQ00600으로 계좌번호 + t0441로 포지션
-      console.log('[CFOAQ50600] 모의계좌 미지원 → t0441 fallback');
+      // 모의계좌: CFOAQ50600 실패 → CFOAQ00600으로 계좌번호 + t0441로 포지션
+      //console.log('[CFOAQ50600] 모의계좌 미지원 → t0441 fallback');
  
-      // ✅ CFOAQ00600으로 계좌번호 가져오기 (모의계좌도 지원)
+      // CFOAQ00600으로 계좌번호 가져오기 (모의계좌도 지원)
       try {
         const acntData2 = await postApi(token, '/futureoption/accno', 'CFOAQ00600', {
           CFOAQ00600InBlock1: {
@@ -98,9 +110,9 @@ export async function fetchAccountAndPositions(token: string): Promise<{
         });
         acntNo = String(acntData2.CFOAQ00600OutBlock1?.AcntNo ?? '');
         acntNm = String(acntData2.CFOAQ00600OutBlock2?.AcntNm ?? '');
-        console.log('[CFOAQ00600] 모의계좌번호:', acntNo ,'계좌이름 :', acntNm);
+        //console.log('[CFOAQ00600] 모의계좌번호:', acntNo ,'계좌이름 :', acntNm);
       } catch (e) {
-        console.log('[CFOAQ00600] 계좌번호 조회 실패:', e);
+        //console.log('[CFOAQ00600] 계좌번호 조회 실패:', e);
       }
  
       const posData = await postApi(token, '/futureoption/accno', 't0441', {
@@ -138,11 +150,12 @@ export async function fetchAccountAndPositions(token: string): Promise<{
           buyAmt: Number(r.mamt ?? 0),
           evalPnl: Number(r.dtsunik1 ?? 0),
           pnlRate: Number(r.sunikrt ?? 0),
-          actprice: actpriceVal, // ✅ t2111에서 직접 가져옴
+          actprice: actpriceVal,
+          currentPrice: Number(r.price ?? 0),
         });
       }
  
-      console.log('[t0441] 모의계좌 포지션:', positions.length);
+      //console.log('[t0441] 모의계좌 포지션:', positions.length);
     }
  
     const account: AccountInfo = { acntNo, acntNm, ordAblAmt };

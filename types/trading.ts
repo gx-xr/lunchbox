@@ -1,3 +1,4 @@
+// trading.ts
 // 앱 전체에서 사용하는 타입 정의
  
 export interface AuthCredentials {
@@ -12,24 +13,25 @@ export interface AccountInfo {
 }
  
 export interface Position {
-  code: string;         // 종목코드
-  name: string;         // 종목명
-  side: 'BUY' | 'SELL'; // 매수/매도
-  qty: number;          // 잔고수량
-  avgPrice: number;     // 평균단가
-  evalAmt: number;      // 평가금액
-  buyAmt: number;       // 매입금액
-  evalPnl: number;      // 평가손익
-  pnlRate: number;      // 수익률(%)
-  actprice: number;     // 행사가
+  code: string;             // 종목코드
+  name: string;             // 종목명
+  side: 'BUY' | 'SELL';     // 매수/매도
+  qty: number;              // 잔고수량
+  avgPrice: number;         // 평균단가
+  evalAmt: number;          // 평가금액
+  buyAmt: number;           // 매매금액
+  evalPnl: number;          // 평가손익
+  pnlRate: number;          // 수익률(%)
+  actprice: number;         // 행사가
+  currentPrice : number;    // 현재가
 }
  
 export interface IndexPrice {
-  name: string;         // 지수명
-  price: number;        // 현재가
-  change: number;       // 전일대비
-  changeRate: number;   // 등락률
-  isUp: boolean;        // 상승여부
+  name: string;             // 지수명
+  price: number;            // 현재가
+  change: number;           // 전일대비
+  changeRate: number;       // 등락률
+  isUp: boolean;            // 상승여부
 }
  
 export type OrderSide = 'BUY' | 'SELL';

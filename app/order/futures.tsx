@@ -1,10 +1,11 @@
+//futures.tsx
 import React, { useState, useEffect, useCallback } from 'react';
 import {
   View, Text, StyleSheet, TouchableOpacity,
   TextInput, ScrollView, Alert, ActivityIndicator,
   Modal, KeyboardAvoidingView, Platform,
 } from 'react-native';
-import { useRouter, useLocalSearchParams } from 'expo-router';
+import { useRouter, useLocalSearchParams, useNavigation } from 'expo-router';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { useAuthStore } from '../../store/authStore';
 import { placeFuturesOrder } from '../../services/order';
@@ -43,6 +44,7 @@ function adjustByTick(price: number, delta: number, tick: number): number {
  
 export default function FuturesScreen() {
   const router = useRouter();
+  const navigation = useNavigation();
   const { side: initSide, market: initMarket, futCode: initFutCode } = useLocalSearchParams<{ side?: string; market?: string; futCode?: string }>();
   const token = useAuthStore((s) => s.token);
  
@@ -61,6 +63,7 @@ export default function FuturesScreen() {
   const [side, setSide] = useState<Side>((initSide as Side) ?? 'BUY');
   const [qty, setQty] = useState('1');
   const [price, setPrice] = useState('0');
+  const [jandatecnt, setJandatecnt] = useState(0);
   const [ordAblAmt, setOrdAblAmt] = useState(0);
   const [maxQty, setMaxQty] = useState(0);
   const [loading, setLoading] = useState(false);
@@ -74,25 +77,27 @@ export default function FuturesScreen() {
     if (!token) return;
     try {
       if (market === 'KOSPI200') {
-        const res = await fetch('https://openapi.ls-sec.co.kr:8080/futureoption/market-data', {
+        const res = await fetch('https://openapi.ls-sec.co.kr:8080/indtp/market-data', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json; charset=utf-8',
             'authorization': `Bearer ${token}`,
-            'tr_cd': 't2111', 'tr_cont': 'N', 'tr_cont_key': '0', 'mac_address': '',
+            'tr_cd': 't1511', 'tr_cont': 'N', 'tr_cont_key': '0', 'mac_address': '',
           },
-          body: JSON.stringify({ t2111InBlock: { focode: 'A0166000' } }),
+          body: JSON.stringify({ t1511InBlock: { upcode: '101' } }),
         });
         const data = await res.json();
-        const b = data?.t2111OutBlock;
+        const b = data?.t1511OutBlock;
         if (b) {
-          const sp = Number(b.kospijisu ?? 0);
-          const ch = Number(b.kospichange ?? 0);
-          const cr = Number(b.kospidiff ?? 0);
+          const sp = Number(b.pricejisu ?? 0);
+          const ch = Number(b.change ?? 0);
+          const cr = Number(b.diffjisu ?? 0);
+          const sign = String(b.sign ?? '3');
+          const isUp = sign === '1' || sign === '2';
           setSpotPrice(sp);
-          setSpotChange(ch);
-          setSpotChangeRate(cr);
-          setSpotIsUp(ch >= 0);
+          setSpotChange(isUp ? Math.abs(ch) : -Math.abs(ch));
+          setSpotChangeRate(isUp ? Math.abs(cr) : -Math.abs(cr));
+          setSpotIsUp(isUp);
         }
       } else {
         // t1511 코스닥150 현물지수
@@ -137,6 +142,7 @@ export default function FuturesScreen() {
     if (f) {
       setFutures(f);
       setPrice((prev) => (prev === '0' || prev === '') ? String(f.price) : prev);
+      if (f.jandatecnt > 0) setJandatecnt(f.jandatecnt);
     }
     if (h) setHoga(h);
     setPriceLoading(false);
@@ -165,6 +171,12 @@ export default function FuturesScreen() {
       setMaxQty(Math.floor(ordAblAmt / (p * config.multiplier)));
     }
   }, [price, ordAblAmt]);
+
+  useEffect(() => {
+    navigation.setOptions({
+      headerTitle: `${config.name} ${isBuy ? '매수' : '매도'}`,
+    });
+  }, [isBuy]);
  
   function adjustQty(delta: number) {
     const next = Math.max(1, Math.min(maxQty || 99, (Number(qty) || 1) + delta));
@@ -251,18 +263,26 @@ export default function FuturesScreen() {
               </View>
             )}
  
-            {/* ✅ 현물지수 */}
+            {/* ✅ 현물지수 + 잔여일 */}
             {spotPrice != null && spotPrice > 0 && (
-              <View style={s.spotRow}>
-                <Text style={s.spotLabel}>{config.spotLabel}</Text>
-                <Text style={[s.spotPrice, { color: spotIsUp ? '#f04452' : '#3182f6' }]}>
-                  {spotPrice.toFixed(2)}
-                </Text>
-                <Text style={[s.spotChange, { color: spotIsUp ? '#f04452' : '#3182f6' }]}>
-                  {spotIsUp ? '▲' : '▼'} {Math.abs(spotChange).toFixed(2)} ({Math.abs(spotChangeRate).toFixed(2)}%)
-                </Text>
+              <View style={[s.spotRow, { justifyContent: 'space-between' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <Text style={s.spotLabel}>{config.spotLabel}</Text>
+                  <Text style={[s.spotPrice, { color: spotIsUp ? '#f04452' : '#3182f6' }]}>
+                    {spotPrice.toFixed(2)}
+                  </Text>
+                  <Text style={[s.spotChange, { color: spotIsUp ? '#f04452' : '#3182f6' }]}>
+                    {spotIsUp ? '▲' : '▼'} {Math.abs(spotChange).toFixed(2)} ({Math.abs(spotChangeRate).toFixed(2)}%)
+                  </Text>
+                </View>
+                {jandatecnt > 0 && (
+                <View style={s.infoTag}>
+                  <Text style={s.infoTagText}>잔여 <Text style={{ color: '#f04452' }}>{jandatecnt}</Text>일</Text>
+                </View>
+              )}
               </View>
             )}
+            
           </View>
  
           {/* 호가창 */}
@@ -276,14 +296,14 @@ export default function FuturesScreen() {
               <>
                 {hoga.asks.map((row, i) => (
                   <TouchableOpacity key={`ask-${i}`} style={s.hogaRow} onPress={() => onHogaPress(row.price, 'BUY')}>
-                    <View style={s.hogaSide} />
-                    <Text style={[s.hogaPrice, { color: '#3182f6' }]}>{row.price.toFixed(2)}</Text>
                     <View style={s.hogaSide}>
                       <View style={[s.hogaBarBg, { backgroundColor: '#eff6ff' }]}>
-                        <View style={[s.hogaBarFill, { width: `${(row.qty / maxHogaQty) * 100}%` as any, backgroundColor: '#bfdbfe' }]} />
+                        <View style={[s.hogaBarFillRight, { width: `${(row.qty / maxHogaQty) * 100}%` as any, backgroundColor: '#bfdbfe' }]} />
                       </View>
                       <Text style={[s.hogaQty, { color: '#3182f6' }]}>{row.qty}</Text>
                     </View>
+                    <Text style={[s.hogaPrice, { color: '#3182f6' }]}>{row.price.toFixed(2)}</Text>
+                    <View style={s.hogaSide} />
                   </TouchableOpacity>
                 ))}
                 <View style={[s.currentBar, { borderColor: changeColor }]}>
@@ -293,14 +313,14 @@ export default function FuturesScreen() {
                 </View>
                 {hoga.bids.map((row, i) => (
                   <TouchableOpacity key={`bid-${i}`} style={s.hogaRow} onPress={() => onHogaPress(row.price, 'SELL')}>
+                    <View style={s.hogaSide} />
+                    <Text style={[s.hogaPrice, { color: '#f04452' }]}>{row.price.toFixed(2)}</Text>
                     <View style={s.hogaSide}>
                       <Text style={[s.hogaQty, { color: '#f04452' }]}>{row.qty}</Text>
                       <View style={[s.hogaBarBg, { backgroundColor: '#fff1f2' }]}>
-                        <View style={[s.hogaBarFillRight, { width: `${(row.qty / maxHogaQty) * 100}%` as any, backgroundColor: '#fecdd3' }]} />
+                        <View style={[s.hogaBarFill, { width: `${(row.qty / maxHogaQty) * 100}%` as any, backgroundColor: '#fecdd3' }]} />
                       </View>
                     </View>
-                    <Text style={[s.hogaPrice, { color: '#f04452' }]}>{row.price.toFixed(2)}</Text>
-                    <View style={s.hogaSide} />
                   </TouchableOpacity>
                 ))}
               </>
@@ -453,8 +473,13 @@ const s = StyleSheet.create({
   ohlcItem: { alignItems: 'center', flex: 1 },
   ohlcLabel: { fontSize: 11, color: '#aaa', marginBottom: 4 },
   ohlcValue: { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
-  // ✅ 현물지수
+  // 현물지수
   spotRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginTop: 10, paddingTop: 10, borderTopWidth: 1, borderTopColor: '#f0f0f0' },
+  // 잔여일
+  infoTagRow: { flexDirection: 'row', gap: 6, marginTop: 10, flexWrap: 'wrap' },
+  infoTag: { paddingHorizontal: 10, paddingVertical: 4, backgroundColor: '#f5f6f8', borderRadius: 8 },
+  infoTagText: { fontSize: 11, fontWeight: '700', color: '#888' },
+  //현물지수
   spotLabel: { fontSize: 11, color: '#aaa', fontWeight: '700' },
   spotPrice: { fontSize: 14, fontWeight: '800' },
   spotChange: { fontSize: 12, fontWeight: '600' },

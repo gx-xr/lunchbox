@@ -582,7 +582,7 @@ export async function runAutoSellCycle(): Promise<void> {
   if (now < 900 || now > 1550) return;
  
   const configs = store.getAutoSellConfigs();
-  console.log('[AutoSellConfigs]', JSON.stringify(configs));
+  //console.log('[AutoSellConfigs]', JSON.stringify(configs));
   if (configs.length === 0) return;
  
   for (const config of configs) {

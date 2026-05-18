@@ -154,7 +154,7 @@ export default function FuturesScreen() {
     const timer = setInterval(() => {
       loadMarketData();
       loadSpotPrice();
-    }, 15000);
+    }, 3000);
     return () => clearInterval(timer);
   }, [loadMarketData, loadSpotPrice]);
  

@@ -264,7 +264,7 @@ export default function HomeScreen() {
  
   useEffect(() => { 
     loadData().finally(() => setLoading(false));
-    const timer = setInterval(() =>{loadData(); }, 30000);
+    const timer = setInterval(() =>{loadData(); }, 10000);
     return () => clearInterval(timer);
   }, [loadData]);
  

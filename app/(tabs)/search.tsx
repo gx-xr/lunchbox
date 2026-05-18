@@ -169,7 +169,9 @@ function KP200Tab({ token }: { token: string }) {
   const [dropdownY, setDropdownY] = useState(0);
   const dropdownBtnRef = useRef<any>(null);
   useEffect(() => { fetchKP200FutureList(token).then(list => setFutures(list)); }, [token]);
+  //코스피200 선물지수 + 호가 + 새로고침(3초)
   useEffect(() => { if (selectedYyyymm) loadBoard(selectedYyyymm); }, []);
+  
   const loadBoard = async (yyyymm: string) => {
     setLoading(true);
     try {

@@ -63,6 +63,7 @@ export async function fetchAccountAndPositions(token: string): Promise<{
           const isuNm = String(r.IsuNm ?? '');
           const parts = isuNm.trim().split(' ');
           const parsedActprice = parseFloat(parts[parts.length - 1].replace(/,/g, '')) || 0;
+          
           return {
             code: String(r.FnoIsuNo ?? ''),
             name: isuNm,

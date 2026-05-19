@@ -219,7 +219,7 @@ export async function fetchPeriodOrders(
         FnoClssCode: '00',   // 전체
         PrdgrpCode: '00',    // 전체
         PrdtExecTpCode: '0', // 전체
-        StlnSeqTp: '4',      // 역순
+        StnlnSeqTp: '4',      // 역순
         CommdaCode: '99',    // 전체
       },
     });

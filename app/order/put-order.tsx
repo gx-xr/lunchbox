@@ -148,7 +148,11 @@ export default function PutOrderScreen() {
  
   useEffect(() => {
     loadHoga();
-    const interval = setInterval(loadHoga, 3000);
+    loadSpotPrice();
+    const interval = setInterval(() => {
+      loadHoga();
+      loadSpotPrice();
+    }, 3000);
     return () => clearInterval(interval);
   }, [loadHoga]);
  

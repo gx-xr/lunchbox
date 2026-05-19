@@ -12,7 +12,7 @@ import { placeFuturesOrder } from '../../services/order';
 import { AccountInfo, Position, IndexPrice, AutoOrderType } from '../../types/trading';
 import AutoMonitorCard from '../../components/AutoMonitorCard';
 import AutoSetupSheet from '../../components/AutoSetupSheet';
-import CallAutoSetupSheet from '../../components/CallAutoSetupSheet'; // ✅ 추가
+import CallAutoSetupSheet from '../../components/CallAutoSetupSheet';
 import { reinitAutoTradingStore } from '../../store/autoTradingStore';
  
 const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
@@ -28,27 +28,6 @@ function formatAmount(n: number): string {
   return n.toLocaleString('ko-KR');
 }
  
-async function fetchCurrentPrice(token: string, code: string): Promise<number> {
-  try {
-    const res = await fetch(`${BASE_URL}/futureoption/market-data`, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json; charset=utf-8',
-        'authorization': `Bearer ${token}`,
-        'tr_cd': 't2111',
-        'tr_cont': 'N',
-        'tr_cont_key': '0',
-        'mac_address': '',
-      },
-      body: JSON.stringify({ t2111InBlock: { focode: code } }),
-    });
-    const data = await res.json();
-    return Number(data?.t2111OutBlock?.price ?? 0);
-  } catch {
-    return 0;
-  }
-}
- 
 function PositionCard({
   position, onPutAutoRegister, onCallAutoRegister, token,
 }: {
@@ -58,9 +37,11 @@ function PositionCard({
   token: string;
 }) {
   const [expanded, setExpanded] = useState(false);
-  const [liquidating, setLiquidating] = useState(false);
   const isProfit = position.evalPnl >= 0;
- 
+  const router = useRouter();
+
+  // console.log('position.name:', position.name, 'position.code:', position.code); //종목명
+
   // 풋매도 판별
   const isPutSell = position.side === 'SELL' && (
     position.name.startsWith('P ') ||
@@ -75,47 +56,7 @@ function PositionCard({
     position.name.includes('콜')
   );
  
-  const handleLiquidate = useCallback(() => {
-    const oppositeSide = position.side === 'SELL' ? '매수' : '매도';
-    Alert.alert(
-      '⚡ 청산',
-      `${position.name}\n${position.qty}계약 지정가 ${oppositeSide}로 청산하시겠습니까?`,
-      [
-        { text: '아니오', style: 'cancel' },
-        {
-          text: '청산하기',
-          style: 'destructive',
-          onPress: async () => {
-            setLiquidating(true);
-            try {
-              const currentPrice = await fetchCurrentPrice(token, position.code);
-              if (currentPrice <= 0) {
-                Alert.alert('실패', '현재가 조회에 실패했습니다. 다시 시도해주세요.');
-                return;
-              }
-              const result = await placeFuturesOrder(token, {
-                fnoIsuNo: position.code,
-                bnsTpCode: position.side === 'SELL' ? '2' : '1',
-                orderType: '00',
-                price: currentPrice,
-                qty: position.qty,
-                trdPtnCode: '03',
-              });
-              if (result.success) {
-                Alert.alert('완료', `청산 주문 접수\n주문번호: ${result.ordNo}\n가격: ${currentPrice}`);
-              } else {
-                Alert.alert('실패', result.message);
-              }
-            } catch (e) {
-              Alert.alert('오류', '청산 중 문제가 발생했습니다.');
-            } finally {
-              setLiquidating(false);
-            }
-          },
-        },
-      ]
-    );
-  }, [token, position]);
+  
  
   return (
     <View style={styles.positionCard}>
@@ -162,43 +103,57 @@ function PositionCard({
               </View>
             ))}
           </View>
- 
+
           <View style={styles.positionBtnRow}>
-            {/* 청산 버튼 */}
+            {/* 차트 버튼 - 추후 추가 */}
+            <TouchableOpacity style={styles.chartBtn} disabled activeOpacity={0.5}>
+              <Text style={styles.chartBtnText}>📊 차트</Text>
+            </TouchableOpacity>
+
+            {/* 매도 버튼 */}
             <TouchableOpacity
-              style={[styles.liquidateBtn, liquidating && styles.btnDisabled]}
-              onPress={handleLiquidate}
-              disabled={liquidating}
+              style={styles.sellBtn}
+              onPress={() => {
+                const isFutures = position.code.startsWith('A');
+                if (isFutures) {
+                  router.push({ pathname: '/order/futures', params: { futCode: position.code, market: position.name.includes('코스닥') ? 'KOSDAQ150' : 'KOSPI200', side: 'SELL' } });
+                } else {
+                  router.push({ pathname: '/order/put-order', params: { putCode: position.code, actprice: String(position.actprice), putPrice: String(position.currentPrice), market: position.name.includes('코스닥') ? 'KOSDAQ150' : 'KOSPI200', optionType: position.name.includes(' C ') || position.name.startsWith('C ') ? 'CALL' : 'PUT', side: 'SELL' } });
+                }
+              }}
               activeOpacity={0.8}
             >
-              {liquidating
-                ? <ActivityIndicator size="small" color="#fff" />
-                : <Text style={styles.liquidateBtnText}>⚡ 청산</Text>
-              }
+              <Text style={styles.sellBtnText}>매도</Text>
             </TouchableOpacity>
- 
-            {/* ✅ 풋매도 자동화 버튼 */}
+
+            {/* 매수 버튼 */}
+            <TouchableOpacity
+              style={styles.buyBtn}
+              onPress={() => {
+                const isFutures = position.code.startsWith('A');
+                if (isFutures) {
+                  router.push({ pathname: '/order/futures', params: { futCode: position.code, market: position.name.includes('코스닥') ? 'KOSDAQ150' : 'KOSPI200', side: 'BUY' } });
+                } else {
+                  router.push({ pathname: '/order/put-order', params: { putCode: position.code, actprice: String(position.actprice), putPrice: String(position.currentPrice), market: position.name.includes('코스닥') ? 'KOSDAQ150' : 'KOSPI200', optionType: position.name.includes(' C ') || position.name.startsWith('C ') ? 'CALL' : 'PUT', side: 'BUY' } });
+                }
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.buyBtnText}>매수</Text>
+            </TouchableOpacity>
+
+            {/* 자동화 버튼 - 풋매도/콜매도만 */}
             {isPutSell && (
-              <TouchableOpacity
-                style={styles.autoRegisterBtn}
-                onPress={() => onPutAutoRegister(position)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.autoRegisterText}>🤖 자동화</Text>
+              <TouchableOpacity style={styles.autoBtn} onPress={() => onPutAutoRegister(position)} activeOpacity={0.8}>
+                <Text style={styles.autoBtnText}>🤖 자동화</Text>
               </TouchableOpacity>
             )}
- 
-            {/* ✅ 콜매도 자동화 버튼 */}
             {isCallSell && (
-              <TouchableOpacity
-                style={styles.callAutoRegisterBtn}
-                onPress={() => onCallAutoRegister(position)}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.autoRegisterText}>🤖 자동화</Text>
+              <TouchableOpacity style={styles.autoBtn} onPress={() => onCallAutoRegister(position)} activeOpacity={0.8}>
+                <Text style={styles.autoBtnText}>🤖 자동화</Text>
               </TouchableOpacity>
             )}
-          </View>
+          </View>     
         </View>
       )}
     </View>
@@ -424,6 +379,14 @@ const styles = StyleSheet.create({
   positionLeft: { flex: 1 },
   positionName: { fontSize: 15, fontWeight: '700', color: '#1a1a1a', marginBottom: 4 },
   positionBadgeRow: { flexDirection: 'row', alignItems: 'center', gap: 6 },
+  chartBtn: { flex: 1, backgroundColor: '#f0f0f0', borderRadius: 12, paddingVertical: 12, alignItems: 'center', opacity: 0.5 },
+  chartBtnText: { fontSize: 13, fontWeight: '700', color: '#aaa' },
+  sellBtn: { flex: 1, backgroundColor: '#3182f6', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  sellBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+  buyBtn: { flex: 1, backgroundColor: '#f04452', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  buyBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
+  autoBtn: { flex: 1, backgroundColor: '#0ca320', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
+  autoBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
   sideBadge: { paddingHorizontal: 8, paddingVertical: 2, borderRadius: 6 },
   sellBadge: { backgroundColor: '#dbeafe' },
   buyBadge: { backgroundColor: '#fce7f3' },
@@ -440,11 +403,6 @@ const styles = StyleSheet.create({
   detailLabel: { fontSize: 11, color: '#aaa', marginBottom: 2 },
   detailValue: { fontSize: 14, fontWeight: '600', color: '#1a1a1a' },
   positionBtnRow: { flexDirection: 'row', gap: 8 },
-  liquidateBtn: { flex: 1, backgroundColor: '#f97316', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
-  liquidateBtnText: { fontSize: 14, fontWeight: '700', color: '#fff' },
-  autoRegisterBtn: { flex: 1, backgroundColor: '#1a1a1a', borderRadius: 12, paddingVertical: 12, alignItems: 'center' },
-  callAutoRegisterBtn: { flex: 1, backgroundColor: '#3182f6', borderRadius: 12, paddingVertical: 12, alignItems: 'center' }, // ✅ 파란색
-  autoRegisterText: { fontSize: 14, fontWeight: '700', color: '#fff' },
   btnDisabled: { opacity: 0.5 },
   indexCard: { backgroundColor: '#fff', borderRadius: 16, padding: 16, flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8, shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2 },
   indexName: { fontSize: 15, fontWeight: '600', color: '#1a1a1a' },

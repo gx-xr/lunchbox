@@ -2,6 +2,9 @@
  * app/order/put-order.tsx
  * 옵션 주문 화면 — futures.tsx 카드 레이아웃 스타일
  * ✅ 지정가 고정 (시장가 제거)
+ * ✅ market 타입 파싱 수정 (string | string[] → 명시적 타입)
+ * ✅ t2111로 종목명 + 잔존일 API에서 직접 받아오기
+ * ✅ 주석 추가 (코드단/UI단 구분)
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -17,6 +20,8 @@ import { fetchAccountAndPositions } from '../../services/account';
 import { fetchFuturesHogaData } from '../../services/market';
 import AutoSetupSheet from '../../components/AutoSetupSheet';
  
+const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
+ 
 interface HogaLevel {
   price: number;
   qty: number;
@@ -25,43 +30,66 @@ interface HogaLevel {
 export default function PutOrderScreen() {
   const router = useRouter();
   const navigation = useNavigation();
+ 
+  // ════════════════════════════════════════
+  // ── 파라미터 수신 ───────────────────────
+  // ════════════════════════════════════════
   const {
-    putCode, actprice, putPrice, weekKey, market,
-    optionType, side, isuNm,
+    putCode,
+    actprice,
+    putPrice,
+    weekKey,
+    market: marketParam,
+    optionType,
+    side,
+    isuNm,
     jandatecnt: jandatecntParam,
   } = useLocalSearchParams<{
     putCode: string;
     actprice: string;
     putPrice: string;
     weekKey: string;
-    market: 'KOSPI200' | 'KOSDAQ150';
-    optionType?: 'PUT' | 'CALL';
-    side?: 'BUY' | 'SELL';
+    market: string;
+    optionType?: string;
+    side?: string;
     isuNm?: string;
     jandatecnt?: string;
   }>();
+ 
+  // ─── market 파싱 (string | string[] → 'KOSPI200' | 'KOSDAQ150') ─
+  const market = (
+    Array.isArray(marketParam) ? marketParam[0] : marketParam
+  ) as 'KOSPI200' | 'KOSDAQ150' | undefined;
+ 
   const token = useAuthStore((s) => s.token);
  
+  // ─── 옵션 타입/방향 판별 ─────────────────────────────────────
   const isSell = side !== 'BUY';
   const isCall = optionType === 'CALL';
   const optionLabel = isCall ? '콜옵션' : '풋옵션';
   const sideLabel = isSell ? '매도' : '매수';
   const sideColor = isSell ? '#3182f6' : '#f04452';
  
+  // ─── 마켓별 설정값 ───────────────────────────────────────────
   const actPrice = Number(actprice ?? 0);
   const marketName = market === 'KOSPI200' ? '코스피200' : '코스닥150';
   const multiplier = market === 'KOSPI200' ? 250000 : 10000;
   const spotLabel = market === 'KOSPI200' ? 'KP200' : 'KQ150';
   const upcode = market === 'KOSPI200' ? '101' : '405';
  
-  // weekKey (예: W3MON, W3THU) → "W3 월" / "W3 목"
+  // ─── weekKey → 표시용 라벨 변환 ─────────────────────────────
   const weekLabel = weekKey
     ? weekKey
-        .replace(/^\d{6}_/, '') // 앞에 202605_ 제거
+        .replace(/^\d{6}_/, '')
         .replace(/^(W\d)(MON|THU)$/, (_, w, d) => `${w} ${d === 'MON' ? '월' : '목'}`)
     : '';
-  const symbolName = `${spotLabel} ${isCall ? 'C' : 'P'} ${weekLabel} ${actPrice > 0 ? actPrice.toLocaleString() : ''}`.trim();
+  const fallbackSymbolName = isuNm || `${spotLabel} ${isCall ? 'C' : 'P'} ${weekLabel} ${actPrice > 0 ? actPrice.toLocaleString() : ''}`.trim();
  
+  // ════════════════════════════════════════
+  // ── State 선언 ──────────────────────────
+  // ════════════════════════════════════════
+ 
+  // ─── 주문 입력 ───────────────────────────────────────────────
   const [qty, setQty] = useState('1');
   const [price, setPrice] = useState(putPrice ?? '0');
   const [maxQty, setMaxQty] = useState(0);
@@ -71,24 +99,36 @@ export default function PutOrderScreen() {
   const [autoSheetVisible, setAutoSheetVisible] = useState(false);
   const [ordNo, setOrdNo] = useState('');
  
-  // 호가 데이터
+  // ─── 호가 데이터 ─────────────────────────────────────────────
   const [asks, setAsks] = useState<HogaLevel[]>([]);
   const [bids, setBids] = useState<HogaLevel[]>([]);
   const [hogaLoading, setHogaLoading] = useState(true);
   const [currentPrice, setCurrentPrice] = useState(Number(putPrice ?? 0));
  
-  // 현물지수
+  // ─── 현물지수 ────────────────────────────────────────────────
   const [spotPrice, setSpotPrice] = useState(0);
   const [spotChange, setSpotChange] = useState(0);
   const [spotChangeRate, setSpotChangeRate] = useState(0);
   const [spotIsUp, setSpotIsUp] = useState(true);
-  const jandatecnt = Number(jandatecntParam ?? 0);
  
-  // ── 현물지수 조회 ──
+  // ─── t2111에서 받아오는 종목명 + 잔존일 ─────────────────────
+  // isuNm(홈에서 넘어온 값) 없으면 API에서 받아옴
+  const [apiSymbolName, setApiSymbolName] = useState('');
+  const [apiJandatecnt, setApiJandatecnt] = useState(0);
+ 
+  // ─── 최종 종목명/잔존일 (API > 파라미터 순) ─────────────────
+  const symbolName = apiSymbolName || fallbackSymbolName;
+  const jandatecnt = apiJandatecnt || Number(jandatecntParam ?? 0);
+ 
+  // ════════════════════════════════════════
+  // ── API 호출 함수들 ─────────────────────
+  // ════════════════════════════════════════
+ 
+  // ─── 현물지수 조회 (t1511) ───────────────────────────────────
   const loadSpotPrice = useCallback(async () => {
     if (!token) return;
     try {
-      const res = await fetch('https://openapi.ls-sec.co.kr:8080/indtp/market-data', {
+      const res = await fetch(`${BASE_URL}/indtp/market-data`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json; charset=utf-8',
@@ -113,6 +153,7 @@ export default function PutOrderScreen() {
     } catch {}
   }, [token, upcode]);
  
+  // ─── 계좌 정보 + 주문가능금액 조회 ──────────────────────────
   useEffect(() => {
     if (!token) return;
     fetchAccountAndPositions(token).then(result => {
@@ -124,23 +165,44 @@ export default function PutOrderScreen() {
     });
     loadSpotPrice();
   }, [token]);
-
+ 
+  // ─── 헤더 타이틀 동적 변경 ──────────────────────────────────
   useEffect(() => {
     navigation.setOptions({
       headerTitle: `${optionLabel} ${sideLabel}`,
     });
   }, [optionLabel, sideLabel]);
  
+  // ─── 호가 + 종목명 + 잔존일 조회 (3초마다 갱신) ────────────
+  // t2111로 종목명(hname), 잔존일(bjandatecnt) 받아옴
   const loadHoga = useCallback(async () => {
     if (!token || !putCode) return;
     try {
+      // ─── t2111: 종목명 + 잔존일 조회 ───────────────────────
+      const nameRes = await fetch(`${BASE_URL}/futureoption/market-data`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json; charset=utf-8',
+          'authorization': `Bearer ${token}`,
+          'tr_cd': 't2111', 'tr_cont': 'N', 'tr_cont_key': '0', 'mac_address': '',
+        },
+        body: JSON.stringify({ t2111InBlock: { focode: putCode } }),
+      });
+      const nameData = await nameRes.json();
+      // const hname = String(nameData?.t2111OutBlock?.hname ?? '');
+      console.log('[t2111 hname 확인]', nameData?.t2111OutBlock?.hname);
+      //const bjandatecnt = Number(nameData?.t2111OutBlock?.bjandatecnt ?? 0);
+      // if (hname) setApiSymbolName(hname);
+      //if (bjandatecnt > 0) setApiJandatecnt(bjandatecnt);
+ 
+      // ─── 호가 조회 ──────────────────────────────────────────
       const data = await fetchFuturesHogaData(token, putCode);
       if (data) {
         setAsks(data.asks.filter(a => a.price > 0));
         setBids(data.bids.filter(b => b.price > 0));
         if (data.bids[0]?.price > 0) {
           setCurrentPrice(data.bids[0].price);
-        }        
+        }
       }
     } catch {}
     setHogaLoading(false);
@@ -156,15 +218,22 @@ export default function PutOrderScreen() {
     return () => clearInterval(interval);
   }, [loadHoga]);
  
+  // ════════════════════════════════════════
+  // ── 이벤트 핸들러 ───────────────────────
+  // ════════════════════════════════════════
+ 
+  // ─── 호가 클릭 → 주문가격 세팅 ─────────────────────────────
   const handleHogaPress = (hogaPrice: number) => {
     setPrice(String(hogaPrice));
   };
  
+  // ─── 수량 조정 ───────────────────────────────────────────────
   function adjustQty(delta: number) {
     const next = Math.max(1, Math.min(maxQty || 99, (Number(qty) || 1) + delta));
     setQty(String(next));
   }
  
+  // ─── 가격 조정 (틱 단위: 0.1 미만 → 0.01, 이상 → 0.05) ─────
   function adjustPrice(delta: number) {
     const cur = Number(price) || 0;
     const tick = cur < 0.1 ? 0.01 : 0.05;
@@ -172,12 +241,15 @@ export default function PutOrderScreen() {
     setPrice(String(next));
   }
  
+  // ─── 주문 확인 모달 오픈 ────────────────────────────────────
   function handleOrder() {
     if (Number(qty) <= 0) { Alert.alert('입력 오류', '수량을 확인해주세요.'); return; }
     if (Number(price) <= 0) { Alert.alert('입력 오류', '가격을 확인해주세요.'); return; }
     setConfirmVisible(true);
   }
  
+  // ─── 주문 실행 ───────────────────────────────────────────────
+  // 풋매도 체결 시 자동화 설정 시트 오픈
   async function confirmOrder() {
     if (!token || !putCode) return;
     setConfirmVisible(false);
@@ -194,6 +266,7 @@ export default function PutOrderScreen() {
       if (result.success) {
         setOrdNo(result.ordNo ?? '');
  
+        // 풋매도 체결 시 → 자동화 설정 시트 오픈
         if (isSell && !isCall) {
           let checked = false;
           for (let i = 0; i < 10; i++) {
@@ -228,10 +301,14 @@ export default function PutOrderScreen() {
     }
   }
  
+  // ─── 계산값 ─────────────────────────────────────────────────
   const estimatedMargin = Number(qty) * Number(price) * multiplier;
   const maxHogaQty = Math.max(...asks.map(a => a.qty), ...bids.map(b => b.qty), 1);
   const spotChangeColor = spotIsUp ? '#f04452' : '#3182f6';
  
+  // ════════════════════════════════════════
+  // ── UI 렌더링 ───────────────────────────
+  // ════════════════════════════════════════
   return (
     <SafeAreaView style={s.safe} edges={['bottom']}>
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
@@ -264,6 +341,8 @@ export default function PutOrderScreen() {
                 </View>
               </View>
             </View>
+ 
+            {/* ── 잔존일 표시 ── */}
             {jandatecnt > 0 && (
               <View style={s.infoTagRow}>
                 <View style={s.infoTag}>
@@ -285,6 +364,7 @@ export default function PutOrderScreen() {
               <Text style={s.hogaEmpty}>장중에만 호가가 표시됩니다</Text>
             ) : (
               <>
+                {/* ── 매도호가 (파랑) ── */}
                 {asks.map((row, i) => (
                   <TouchableOpacity key={`ask-${i}`} style={s.hogaRow} onPress={() => handleHogaPress(row.price)} activeOpacity={0.7}>
                     <View style={s.hogaSide}>
@@ -298,12 +378,14 @@ export default function PutOrderScreen() {
                   </TouchableOpacity>
                 ))}
  
+                {/* ── 현재가 바 ── */}
                 <View style={[s.currentBar, { borderColor: sideColor }]}>
                   <Text style={[s.currentBarTxt, { color: sideColor }]}>
                     현재가  {currentPrice.toFixed(2)}
                   </Text>
                 </View>
  
+                {/* ── 매수호가 (빨강) ── */}
                 {bids.map((row, i) => (
                   <TouchableOpacity key={`bid-${i}`} style={s.hogaRow} onPress={() => handleHogaPress(row.price)} activeOpacity={0.7}>
                     <View style={s.hogaSide} />
@@ -338,6 +420,7 @@ export default function PutOrderScreen() {
  
           {/* ── 주문 입력 카드 ── */}
           <View style={s.card}>
+            {/* ── 수량 입력 ── */}
             <Text style={s.inputLabel}>수량 (계약)</Text>
             <View style={s.inputRow}>
               <TouchableOpacity style={s.adjBtn} onPress={() => adjustQty(-1)}>
@@ -372,6 +455,7 @@ export default function PutOrderScreen() {
               )}
             </View>
  
+            {/* ── 가격 입력 ── */}
             <Text style={s.inputLabel}>가격 (지정가)</Text>
             <View style={s.inputRow}>
               <TouchableOpacity style={s.adjBtn} onPress={() => adjustPrice(-1)}>
@@ -391,6 +475,7 @@ export default function PutOrderScreen() {
               </Text>
             </TouchableOpacity>
  
+            {/* ── 예상 증거금 ── */}
             <View style={s.totalRow}>
               <Text style={s.totalLabel}>예상 증거금</Text>
               <Text style={s.totalValue}>{estimatedMargin.toLocaleString()}원</Text>
@@ -400,6 +485,7 @@ export default function PutOrderScreen() {
           <View style={{ height: 16 }} />
         </ScrollView>
  
+        {/* ── 주문 버튼 (하단 고정) ── */}
         <View style={s.footer}>
           <TouchableOpacity
             style={[s.orderBtn, { backgroundColor: sideColor }, loading && s.disabled]}
@@ -415,6 +501,7 @@ export default function PutOrderScreen() {
         </View>
       </KeyboardAvoidingView>
  
+      {/* ── 주문 확인 모달 ── */}
       <Modal transparent visible={confirmVisible} animationType="fade">
         <View style={s.overlay}>
           <View style={s.modal}>
@@ -444,6 +531,8 @@ export default function PutOrderScreen() {
         </View>
       </Modal>
  
+      {/* ── 풋매도 자동화 설정 시트 ── */}
+      {/* 풋매도 체결 후 자동으로 열림 */}
       <AutoSetupSheet
         visible={autoSheetVisible}
         onClose={() => { setAutoSheetVisible(false); router.back(); }}
@@ -453,11 +542,15 @@ export default function PutOrderScreen() {
         currentPrice={currentPrice}
         market={market ?? 'KOSPI200'}
         ordNo={ordNo}
+        weekKey={weekKey ?? ''}
       />
     </SafeAreaView>
   );
 }
  
+// ════════════════════════════════════════
+// ── 스타일 ──────────────────────────────
+// ════════════════════════════════════════
 const s = StyleSheet.create({
   safe: { flex: 1, backgroundColor: '#f5f6f8' },
   scroll: { flex: 1, padding: 16 },

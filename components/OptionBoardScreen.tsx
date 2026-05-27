@@ -112,7 +112,6 @@ export default function OptionBoardScreen({
   const [selectedItem, setSelectedItem] = useState<OptionBoardItem | null>(null);
   const [clickedSide, setClickedSide] = useState<'CALL' | 'PUT' | null>(null);
   const [sheetVisible, setSheetVisible] = useState(false);
- 
   const atmActprice = board.length > 0 && futurePrice > 0
     ? board.reduce((prev, cur) =>
         Math.abs(cur.actprice - futurePrice) < Math.abs(prev.actprice - futurePrice) ? cur : prev

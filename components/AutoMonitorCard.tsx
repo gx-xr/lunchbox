@@ -29,6 +29,7 @@ function StatusBadge({ status }: { status: AutoTradingEntry['status'] }) {
   const config = {
     monitoring: { label: '● 모니터링 중', color: '#3182f6', bg: '#eff6ff' },
     closed:     { label: '✓ 청산완료',    color: '#16a34a', bg: '#f0fdf4' },
+    closing:     { label: '✓ 청산접수완료',    color: '#16a34a', bg: '#f0fdf4' },
     hedged:     { label: '⚡ 헤지완료',   color: '#b45309', bg: '#fffbeb' },
   }[status];
   return (
@@ -43,6 +44,7 @@ function CallStatusBadge({ status }: { status: CallTradingEntry['status'] }) {
   const config = {
     monitoring: { label: '● 모니터링 중', color: '#f04452', bg: '#fff1f0' },
     closed:     { label: '✓ 청산완료',    color: '#16a34a', bg: '#f0fdf4' },
+    closing:     { label: '✓ 청산접수완료',    color: '#16a34a', bg: '#f0fdf4' },
     hedged:     { label: '⚡ 매도완료',   color: '#b45309', bg: '#fffbeb' },
   }[status];
   return (

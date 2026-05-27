@@ -1,6 +1,8 @@
 /**
  * app/(tabs)/orders.tsx
  * 주문내역 — 기간별 검색 + 빠른선택 버튼 + 달력 피커
+ * ✅ 오늘 주문 ordtime 기준 내림차순 정렬 수정
+ * ✅ 주석 추가 (코드단/UI단 구분)
  */
 import React, { useEffect, useState, useCallback } from 'react';
 import {
@@ -16,6 +18,9 @@ import {
   FuturesOrderItem, PeriodOrderItem,
 } from '../../services/order';
  
+// ════════════════════════════════════════
+// ── 타입 정의 ───────────────────────────
+// ════════════════════════════════════════
 type FilterTab = '전체' | '체결' | '미체결';
 type QuickRange = '오늘' | '1주일' | '1개월' | '직접입력';
  
@@ -29,8 +34,10 @@ interface UnifiedOrder {
   ordQty: number;
   execQty: number;
   unercQty: number;
-  ordTime: string;
-  ordDt: string;
+  ordTime: string;      // 표시용 "HH:MM:SS"
+  ordTimeRaw: string;   // 정렬용 원시값 "HHMMSS"
+  ordDt: string;        // 표시용 "오늘" or "MM.DD"
+  ordDtRaw: string;     // 정렬용 "YYYYMMDD" or "99999999"(오늘)
   bnsplAmt: number;
   mrcTpNm: string;
   isPending: boolean;
@@ -39,7 +46,11 @@ interface UnifiedOrder {
   rawTodayOrder?: FuturesOrderItem;
 }
  
-// ─── 날짜 유틸 ─────────────────────────────────────────────
+// ════════════════════════════════════════
+// ── 날짜/시간 유틸 함수 ─────────────────
+// ════════════════════════════════════════
+ 
+// ─── Date → YYYYMMDD 문자열 ─────────────────────────────────
 function toYYYYMMDD(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -47,6 +58,7 @@ function toYYYYMMDD(date: Date): string {
   return `${y}${m}${d}`;
 }
  
+// ─── Date → 표시용 "YYYY-MM-DD" ─────────────────────────────
 function formatDisplayDate(date: Date): string {
   const y = date.getFullYear();
   const m = String(date.getMonth() + 1).padStart(2, '0');
@@ -54,6 +66,7 @@ function formatDisplayDate(date: Date): string {
   return `${y}-${m}-${d}`;
 }
  
+// ─── 시간 문자열 → "HH:MM:SS" 형식 변환 ────────────────────
 function formatTime(s: string): string {
   const t = s.replace(/\D/g, '');
   if (t.length >= 6) return `${t.slice(0, 2)}:${t.slice(2, 4)}:${t.slice(4, 6)}`;
@@ -61,6 +74,7 @@ function formatTime(s: string): string {
   return s;
 }
  
+// ─── 빠른 선택 범위 → 시작/종료 날짜 계산 ──────────────────
 function getQuickDates(range: QuickRange): { start: Date; end: Date } {
   const end = new Date();
   const start = new Date();
@@ -69,7 +83,20 @@ function getQuickDates(range: QuickRange): { start: Date; end: Date } {
   return { start, end };
 }
  
-// ─── t0434 → UnifiedOrder ──────────────────────────────────
+// ─── 주문 내림차순 정렬 (최신 → 오래된 순) ──────────────────
+// ordDtRaw: 오늘 = "99999999", 과거 = "YYYYMMDD"
+// ordTimeRaw: "HHMMSS" 숫자 문자열
+function sortOrdersDesc(a: UnifiedOrder, b: UnifiedOrder): number {
+  const aKey = `${a.ordDtRaw}${a.ordTimeRaw}`;
+  const bKey = `${b.ordDtRaw}${b.ordTimeRaw}`;
+  return bKey.localeCompare(aKey); // 내림차순
+}
+ 
+// ════════════════════════════════════════
+// ── 데이터 변환 함수 ────────────────────
+// ════════════════════════════════════════
+ 
+// ─── t0434(오늘 주문) → UnifiedOrder ────────────────────────
 function todayToUnified(o: FuturesOrderItem, nameMap: Record<string, string>): UnifiedOrder {
   const isCancelOrder = o.medosu?.includes('취소') || o.status?.includes('취소');
   const isBuy = !isCancelOrder && (o.medosu === '매수' || o.medosu === '2');
@@ -78,6 +105,10 @@ function todayToUnified(o: FuturesOrderItem, nameMap: Record<string, string>): U
   const displaySide = isCancelOrder
     ? (o.medosu?.includes('매수') ? '매수' : '매도')
     : (isBuy ? '매수' : '매도');
+ 
+  // ordtime: "14460702" → raw: "144607", display: "14:46:07"
+  const timeRaw = o.ordtime.replace(/\D/g, '').slice(0, 6);
+ 
   return {
     id: `today-${o.ordno}`,
     isuNm: o.hname || nameMap[o.expcode] || o.expcode,
@@ -89,7 +120,9 @@ function todayToUnified(o: FuturesOrderItem, nameMap: Record<string, string>): U
     execQty: o.cheqty,
     unercQty: o.ordrem,
     ordTime: formatTime(o.ordtime),
+    ordTimeRaw: timeRaw,
     ordDt: '오늘',
+    ordDtRaw: '99999999', // 오늘은 가장 최신이므로 최대값
     bnsplAmt: 0,
     mrcTpNm: isCancelOrder ? '취소' : '',
     isPending,
@@ -99,13 +132,15 @@ function todayToUnified(o: FuturesOrderItem, nameMap: Record<string, string>): U
   };
 }
  
-// ─── CFOAQ00600 → UnifiedOrder ─────────────────────────────
+// ─── CFOAQ00600(기간 주문) → UnifiedOrder ───────────────────
 function periodToUnified(o: PeriodOrderItem): UnifiedOrder {
   const isPending = o.unercQty > 0;
   const isFilled = o.execQty > 0 && o.unercQty === 0;
   const isCancelled = o.mrcTpNm?.includes('취소') || (o.execQty === 0 && o.unercQty === 0);
   const mm = o.ordDt.slice(4, 6);
   const dd = o.ordDt.slice(6, 8);
+  const timeRaw = o.ordTime.replace(/\D/g, '').slice(0, 6);
+ 
   return {
     id: `period-${o.ordDt}-${o.ordNo}`,
     isuNm: o.isuNm || o.fnoIsuNo,
@@ -117,7 +152,9 @@ function periodToUnified(o: PeriodOrderItem): UnifiedOrder {
     execQty: o.execQty,
     unercQty: o.unercQty,
     ordTime: formatTime(o.ordTime),
+    ordTimeRaw: timeRaw,
     ordDt: `${mm}.${dd}`,
+    ordDtRaw: o.ordDt, // "YYYYMMDD"
     bnsplAmt: o.bnsplAmt,
     mrcTpNm: o.mrcTpNm || '',
     isPending,
@@ -126,8 +163,12 @@ function periodToUnified(o: PeriodOrderItem): UnifiedOrder {
   };
 }
  
-// ─── 종목명 맵 ─────────────────────────────────────────────
+// ════════════════════════════════════════
+// ── API 호출 함수 ───────────────────────
+// ════════════════════════════════════════
 const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
+ 
+// ─── 종목명 맵 조회 (t8433, t8435, t8432) ───────────────────
 async function fetchNameMap(token: string): Promise<Record<string, string>> {
   const map: Record<string, string> = {};
   try {
@@ -143,20 +184,24 @@ async function fetchNameMap(token: string): Promise<Record<string, string>> {
       });
       return res.json();
     };
+    // KP200 옵션 마스터
     const kospi = await post('t8433', { t8433InBlock: { dummy: '' } });
     for (const item of (kospi.t8433OutBlock ?? [])) {
       if (item.expcode) map[item.expcode] = item.hname;
       if (item.shcode) map[item.shcode] = item.hname;
     }
+    // KQ150 위클리 옵션
     const kosdaq = await post('t8435', { t8435InBlock: { gubun: 'QW' } });
     for (const item of (kosdaq.t8435OutBlock ?? [])) {
       if (item.expcode) map[item.expcode] = item.hname;
       if (item.shcode) map[item.shcode] = item.hname;
     }
+    // KP200 선물
     const futKospi = await post('t8432', { t8432InBlock: { dummy: '' } });
     for (const item of (futKospi.t8432OutBlock ?? [])) {
       if (item.shcode) map[item.shcode] = item.hname;
     }
+    // KQ150 선물
     const futKosdaq = await post('t8435', { t8435InBlock: { gubun: 'SF' } });
     for (const item of (futKosdaq.t8435OutBlock ?? [])) {
       if (item.shcode) map[item.shcode] = item.hname;
@@ -165,6 +210,7 @@ async function fetchNameMap(token: string): Promise<Record<string, string>> {
   return map;
 }
  
+// ─── 오늘 주문 종목명 개별 조회 (t2101) ─────────────────────
 async function fetchTodayNames(token: string, codes: string[]): Promise<Record<string, string>> {
   const map: Record<string, string> = {};
   if (codes.length === 0) return map;
@@ -190,7 +236,9 @@ async function fetchTodayNames(token: string, codes: string[]): Promise<Record<s
   return map;
 }
  
-// ─── 정정 모달 ─────────────────────────────────────────────
+// ════════════════════════════════════════
+// ── 정정 모달 컴포넌트 ──────────────────
+// ════════════════════════════════════════
 function ModifyModal({ visible, order, onClose, onConfirm }: {
   visible: boolean; order: UnifiedOrder | null;
   onClose: () => void; onConfirm: (newPrice: number, newQty: number) => void;
@@ -200,6 +248,8 @@ function ModifyModal({ visible, order, onClose, onConfirm }: {
   useEffect(() => {
     if (order) { setPrice(String(order.ordPrc)); setQty(String(order.unercQty)); }
   }, [order]);
+ 
+  // ── UI 렌더링 ──
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>
       <View style={ms.overlay}>
@@ -232,7 +282,9 @@ function ModifyModal({ visible, order, onClose, onConfirm }: {
   );
 }
  
-// ─── 주문 카드 ─────────────────────────────────────────────
+// ════════════════════════════════════════
+// ── 주문 카드 컴포넌트 ──────────────────
+// ════════════════════════════════════════
 function OrderCard({ order, onModify, onCancel }: {
   order: UnifiedOrder; onModify: (o: UnifiedOrder) => void; onCancel: (o: UnifiedOrder) => void;
 }) {
@@ -249,8 +301,11 @@ function OrderCard({ order, onModify, onCancel }: {
     : order.isFilled
     ? { text: '체결', color: '#10b981', bg: '#f0fdf4' }
     : { text: '완료', color: '#aaa', bg: '#f5f5f5' };
+ 
+  // ── UI 렌더링 ──
   return (
     <View style={styles.card}>
+      {/* ── 카드 상단: 종목명 + 상태 배지 ── */}
       <View style={styles.cardTop}>
         <View style={styles.cardLeft}>
           <Text style={styles.orderName} numberOfLines={1}>{order.isuNm}</Text>
@@ -274,6 +329,8 @@ function OrderCard({ order, onModify, onCancel }: {
           </View>
         </View>
       </View>
+ 
+      {/* ── 카드 중단: 주문가/체결가/수량 ── */}
       <View style={styles.cardMid}>
         <View style={styles.infoItem}>
           <Text style={styles.infoLabel}>주문가</Text>
@@ -296,9 +353,13 @@ function OrderCard({ order, onModify, onCancel }: {
           </Text>
         </View>
       </View>
+ 
+      {/* ── 체결 진행률 바 ── */}
       <View style={styles.progressBg}>
         <View style={[styles.progressFill, { width: `${fillRate}%` as any }]} />
       </View>
+ 
+      {/* ── 매매손익 (있을 때만 표시) ── */}
       {hasPnl && (
         <View style={styles.pnlRow}>
           <Text style={styles.pnlLabel}>매매손익</Text>
@@ -307,6 +368,8 @@ function OrderCard({ order, onModify, onCancel }: {
           </Text>
         </View>
       )}
+ 
+      {/* ── 정정/취소 버튼 (미체결 오늘 주문만) ── */}
       {order.isPending && !order.isCancelled && order.rawTodayOrder && (
         <>
           <View style={styles.actionDivider} />
@@ -324,9 +387,13 @@ function OrderCard({ order, onModify, onCancel }: {
   );
 }
  
-// ─── 메인 화면 ─────────────────────────────────────────────
+// ════════════════════════════════════════
+// ── 메인 화면 ───────────────────────────
+// ════════════════════════════════════════
 export default function OrdersScreen() {
   const { token } = useAuthStore();
+ 
+  // ─── State 선언 ──────────────────────────────────────────
   const [filterTab, setFilterTab] = useState<FilterTab>('전체');
   const [orders, setOrders] = useState<UnifiedOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -334,13 +401,14 @@ export default function OrdersScreen() {
   const [modifyTarget, setModifyTarget] = useState<UnifiedOrder | null>(null);
   const [processing, setProcessing] = useState(false);
  
-  // ─── 기간 선택 ───────────────────────────────────────────
+  // ─── 기간 선택 State ─────────────────────────────────────
   const [quickRange, setQuickRange] = useState<QuickRange>('오늘');
   const [startDate, setStartDate] = useState<Date>(new Date());
   const [endDate, setEndDate] = useState<Date>(new Date());
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
  
+  // ─── 빠른 선택 버튼 핸들러 ──────────────────────────────
   const handleQuickRange = (range: QuickRange) => {
     setQuickRange(range);
     if (range !== '직접입력') {
@@ -350,6 +418,7 @@ export default function OrdersScreen() {
     }
   };
  
+  // ─── 주문 목록 조회 ──────────────────────────────────────
   const loadOrders = useCallback(async (sDate?: Date, eDate?: Date) => {
     if (!token) return;
     const s = sDate ?? startDate;
@@ -361,49 +430,60 @@ export default function OrdersScreen() {
       fetchPeriodOrders(token, toYYYYMMDD(s), toYYYYMMDD(e)),
     ]);
  
+    // 기간 주문에서 종목명 보정
     const periodNameMap: Record<string, string> = {};
     for (const o of periodList) {
       if (o.fnoIsuNo && o.isuNm) periodNameMap[o.fnoIsuNo] = o.isuNm;
     }
     const mapWithPeriod = { ...map, ...periodNameMap };
  
+    // 오늘 주문 종목명 개별 조회 (맵에 없는 경우)
     const todayCodes = todayList.map(o => o.expcode).filter(c => c && !mapWithPeriod[c]);
     const todayNameMap = todayCodes.length > 0 ? await fetchTodayNames(token, todayCodes) : {};
     const mergedMap = { ...mapWithPeriod, ...todayNameMap };
  
+    // UnifiedOrder로 변환
     const todayUnified = todayList.map(o => todayToUnified(o, mergedMap));
+ 
+    // 기간 주문에서 오늘 주문 중복 제거
     const todayOrdNos = new Set(todayList.map(o => o.ordno));
     const periodUnified = periodList
       .map(o => periodToUnified(o))
       .filter(o => !todayOrdNos.has(o.id.replace('period-', '').split('-').pop() ?? ''));
  
-    setOrders([...todayUnified, ...periodUnified].reverse());
+    // ✅ ordDtRaw + ordTimeRaw 기준 내림차순 정렬 (최신 → 오래된 순)
+    const allOrders = [...todayUnified, ...periodUnified].sort(sortOrdersDesc);
+    setOrders(allOrders);
   }, [token, startDate, endDate]);
  
+  // ─── 최초 로드 ───────────────────────────────────────────
   useEffect(() => {
     setLoading(true);
     loadOrders().finally(() => setLoading(false));
   }, []);
  
-  // 기간 변경 시 자동 조회
+  // ─── 기간 변경 시 자동 조회 (직접입력 제외) ─────────────
   useEffect(() => {
     if (quickRange !== '직접입력') {
       loadOrders(startDate, endDate);
     }
   }, [startDate, endDate]);
  
+  // ─── 당겨서 새로고침 ─────────────────────────────────────
   const onRefresh = useCallback(async () => {
     setRefreshing(true);
     await loadOrders();
     setRefreshing(false);
   }, [loadOrders]);
  
+  // ─── 필터 탭 적용 ────────────────────────────────────────
   const filteredOrders = orders.filter(o => {
     if (filterTab === '체결') return o.isFilled;
     if (filterTab === '미체결') return o.isPending;
     return true;
   });
  
+  // ─── 주문 취소 ───────────────────────────────────────────
   const handleCancel = useCallback((order: UnifiedOrder) => {
     if (!order.rawTodayOrder) return;
     Alert.alert('주문 취소', `${order.isuNm}\n미체결 ${order.unercQty}계약을 취소하시겠습니까?`, [
@@ -425,6 +505,7 @@ export default function OrdersScreen() {
     ]);
   }, [token, loadOrders]);
  
+  // ─── 주문 정정 ───────────────────────────────────────────
   const handleModifyConfirm = useCallback(async (newPrice: number, newQty: number) => {
     if (!token || !modifyTarget?.rawTodayOrder) return;
     setProcessing(true);
@@ -447,13 +528,18 @@ export default function OrdersScreen() {
     } finally { setProcessing(false); }
   }, [token, modifyTarget, loadOrders]);
  
+  // ════════════════════════════════════════
+  // ── UI 렌더링 ───────────────────────────
+  // ════════════════════════════════════════
   return (
     <View style={styles.container}>
+ 
+      {/* ── 헤더 ── */}
       <View style={styles.header}>
         <Text style={styles.headerTitle}>주문내역</Text>
       </View>
  
-      {/* 빠른 선택 버튼 */}
+      {/* ── 빠른 선택 버튼 ── */}
       <View style={styles.quickRow}>
         {(['오늘', '1주일', '1개월', '직접입력'] as QuickRange[]).map(r => (
           <TouchableOpacity
@@ -466,7 +552,7 @@ export default function OrdersScreen() {
         ))}
       </View>
  
-      {/* 직접입력 - 날짜 피커 */}
+      {/* ── 직접입력 날짜 피커 ── */}
       {quickRange === '직접입력' && (
         <View style={styles.dateRow}>
           <TouchableOpacity style={styles.dateBtn} onPress={() => setShowStartPicker(true)}>
@@ -484,31 +570,20 @@ export default function OrdersScreen() {
  
       {showStartPicker && (
         <DateTimePicker
-          value={startDate}
-          mode="date"
-          display="default"
-          onChange={(_, date) => {
-            setShowStartPicker(false);
-            if (date) setStartDate(date);
-          }}
+          value={startDate} mode="date" display="default"
+          onChange={(_, date) => { setShowStartPicker(false); if (date) setStartDate(date); }}
           maximumDate={endDate}
         />
       )}
       {showEndPicker && (
         <DateTimePicker
-          value={endDate}
-          mode="date"
-          display="default"
-          onChange={(_, date) => {
-            setShowEndPicker(false);
-            if (date) setEndDate(date);
-          }}
-          minimumDate={startDate}
-          maximumDate={new Date()}
+          value={endDate} mode="date" display="default"
+          onChange={(_, date) => { setShowEndPicker(false); if (date) setEndDate(date); }}
+          minimumDate={startDate} maximumDate={new Date()}
         />
       )}
  
-      {/* 필터 탭 */}
+      {/* ── 전체/체결/미체결 필터 탭 ── */}
       <View style={styles.filterTabs}>
         {(['전체', '체결', '미체결'] as FilterTab[]).map(t => (
           <TouchableOpacity
@@ -521,6 +596,7 @@ export default function OrdersScreen() {
         ))}
       </View>
  
+      {/* ── 주문 목록 ── */}
       {loading ? (
         <View style={styles.loadingBox}>
           <ActivityIndicator size="large" color="#3182f6" />
@@ -550,6 +626,7 @@ export default function OrdersScreen() {
         </ScrollView>
       )}
  
+      {/* ── 정정 모달 ── */}
       <ModifyModal
         visible={!!modifyTarget}
         order={modifyTarget}
@@ -557,6 +634,7 @@ export default function OrdersScreen() {
         onConfirm={handleModifyConfirm}
       />
  
+      {/* ── 처리 중 오버레이 ── */}
       {processing && (
         <View style={styles.processingOverlay}>
           <ActivityIndicator size="large" color="#fff" />
@@ -567,6 +645,9 @@ export default function OrdersScreen() {
   );
 }
  
+// ════════════════════════════════════════
+// ── 스타일 ──────────────────────────────
+// ════════════════════════════════════════
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: '#f5f6f8' },
   header: {
@@ -579,11 +660,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: 16, paddingVertical: 10, gap: 6,
     borderBottomWidth: 1, borderBottomColor: '#f0f0f0',
   },
-  quickBtn: {
-    paddingHorizontal: 10, paddingVertical: 6,
-    borderRadius: 8, backgroundColor: '#f5f6f8',
-  },
-  quickBtnActive: { backgroundColor: '#35bd1a' },
+  quickBtn: { paddingHorizontal: 10, paddingVertical: 6, borderRadius: 8, backgroundColor: '#f5f6f8' },
+  quickBtnActive: { backgroundColor: '#0ca320' },
   quickBtnText: { fontSize: 12, fontWeight: '600', color: '#888' },
   quickBtnTextActive: { color: '#fff' },
   dateRow: {
@@ -598,10 +676,7 @@ const styles = StyleSheet.create({
   },
   dateBtnText: { fontSize: 13, fontWeight: '600', color: '#1a1a1a' },
   dateSep: { fontSize: 14, color: '#888', fontWeight: '600' },
-  searchBtn: {
-    paddingVertical: 8, paddingHorizontal: 16,
-    backgroundColor: '#35bd1a', borderRadius: 8,
-  },
+  searchBtn: { paddingVertical: 8, paddingHorizontal: 16, backgroundColor: '#0ca320', borderRadius: 8 },
   searchBtnText: { fontSize: 13, fontWeight: '700', color: '#fff' },
   filterTabs: {
     flexDirection: 'row', backgroundColor: '#fff',
@@ -611,16 +686,13 @@ const styles = StyleSheet.create({
     flex: 1, paddingVertical: 12, alignItems: 'center',
     borderBottomWidth: 2, borderBottomColor: 'transparent',
   },
-  filterTabActive: { borderBottomColor: '#35bd1a' },
+  filterTabActive: { borderBottomColor: '#0ca320' },
   filterTabText: { fontSize: 14, fontWeight: '600', color: '#bbb' },
-  filterTabTextActive: { color: '#1a1a1a' },
+  filterTabTextActive: { color: '#0ca320' },
   loadingBox: { flex: 1, justifyContent: 'center', alignItems: 'center' },
   list: { flex: 1 },
   listContent: { padding: 16, gap: 10 },
-  emptyBox: {
-    backgroundColor: '#fff', borderRadius: 16, padding: 40,
-    alignItems: 'center', marginTop: 24,
-  },
+  emptyBox: { backgroundColor: '#fff', borderRadius: 16, padding: 40, alignItems: 'center', marginTop: 24 },
   emptyText: { fontSize: 14, color: '#bbb' },
   card: {
     backgroundColor: '#fff', borderRadius: 16,
@@ -643,10 +715,7 @@ const styles = StyleSheet.create({
   buyBadge: { backgroundColor: '#fce7f3' },
   sellBadge: { backgroundColor: '#dbeafe' },
   sideBadgeText: { fontSize: 11, fontWeight: '700' },
-  cardMid: {
-    flexDirection: 'row', justifyContent: 'space-between',
-    paddingHorizontal: 16, paddingBottom: 10,
-  },
+  cardMid: { flexDirection: 'row', justifyContent: 'space-between', paddingHorizontal: 16, paddingBottom: 10 },
   infoItem: { alignItems: 'center' },
   infoLabel: { fontSize: 10, color: '#aaa', marginBottom: 2 },
   infoValue: { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
@@ -661,15 +730,9 @@ const styles = StyleSheet.create({
   pnlValue: { fontSize: 13, fontWeight: '700' },
   actionDivider: { height: 1, backgroundColor: '#f0f0f0', marginHorizontal: 16 },
   actionRow: { flexDirection: 'row', gap: 8, padding: 12 },
-  modifyBtn: {
-    flex: 1, paddingVertical: 11, backgroundColor: '#f5f5f5',
-    borderRadius: 10, alignItems: 'center',
-  },
+  modifyBtn: { flex: 1, paddingVertical: 11, backgroundColor: '#f5f5f5', borderRadius: 10, alignItems: 'center' },
   modifyBtnText: { fontSize: 13, fontWeight: '700', color: '#1a1a1a' },
-  cancelOrderBtn: {
-    flex: 1, paddingVertical: 11, backgroundColor: '#fff1f0',
-    borderRadius: 10, alignItems: 'center',
-  },
+  cancelOrderBtn: { flex: 1, paddingVertical: 11, backgroundColor: '#fff1f0', borderRadius: 10, alignItems: 'center' },
   cancelOrderBtnText: { fontSize: 13, fontWeight: '700', color: '#e53e3e' },
   processingOverlay: {
     ...StyleSheet.absoluteFillObject,
@@ -681,10 +744,7 @@ const styles = StyleSheet.create({
  
 const ms = StyleSheet.create({
   overlay: { flex: 1, backgroundColor: 'rgba(0,0,0,0.4)', justifyContent: 'flex-end' },
-  sheet: {
-    backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24,
-    padding: 24, paddingBottom: 40,
-  },
+  sheet: { backgroundColor: '#fff', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 24, paddingBottom: 40 },
   title: { fontSize: 18, fontWeight: '800', color: '#1a1a1a', marginBottom: 4 },
   subTitle: { fontSize: 13, color: '#888', marginBottom: 20 },
   inputRow: { marginBottom: 16 },
@@ -695,14 +755,8 @@ const ms = StyleSheet.create({
     fontSize: 16, fontWeight: '600', color: '#1a1a1a',
   },
   btnRow: { flexDirection: 'row', gap: 10, marginTop: 8 },
-  cancelBtn: {
-    flex: 1, paddingVertical: 14, backgroundColor: '#f5f5f5',
-    borderRadius: 12, alignItems: 'center',
-  },
+  cancelBtn: { flex: 1, paddingVertical: 14, backgroundColor: '#f5f5f5', borderRadius: 12, alignItems: 'center' },
   cancelBtnText: { fontSize: 15, fontWeight: '700', color: '#666' },
-  confirmBtn: {
-    flex: 2, paddingVertical: 14, backgroundColor: '#1a1a1a',
-    borderRadius: 12, alignItems: 'center',
-  },
+  confirmBtn: { flex: 2, paddingVertical: 14, backgroundColor: '#1a1a1a', borderRadius: 12, alignItems: 'center' },
   confirmBtnText: { fontSize: 15, fontWeight: '700', color: '#fff' },
 });

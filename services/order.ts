@@ -1,8 +1,17 @@
-// order.ts
-const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
-console.log('NEW ORDER.TS LOADED')
-console.log('=== NEW ORDER.TS v2 ===');
+/**
+ * services/order.ts
+ * 선물옵션 주문 관련 API
+ * ✅ CFOAT00100: 신규주문
+ * ✅ CFOAT00300: 취소주문
+ * ✅ t0434: 당일 체결/미체결 조회
+ * ✅ CFOAQ00600: 기간별 주문체결내역 조회 (연속조회 추가)
+ */
  
+const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
+ 
+// ════════════════════════════════════════
+// ── 공통 API 호출 함수 ──────────────────
+// ════════════════════════════════════════
 const postApi = async (token: string, path: string, trCd: string, body: object) => {
   const res = await fetch(`${BASE_URL}${path}`, {
     method: 'POST',
@@ -21,6 +30,9 @@ const postApi = async (token: string, path: string, trCd: string, body: object) 
   return data;
 };
  
+// ════════════════════════════════════════
+// ── 타입 정의 ───────────────────────────
+// ════════════════════════════════════════
 export type OrderPriceType = '00' | '03'; // 00: 지정가, 03: 시장가
 export type TrdPtnCode = '00' | '03';     // 00: 신규, 03: 청산
  
@@ -39,7 +51,46 @@ export interface OrderResult {
   message: string;
 }
  
-// ─── CFOAT00100: 선물옵션 신규주문 ───────────────────────────
+// ─── t0434 당일 주문 항목 타입 ───────────────────────────────
+export interface FuturesOrderItem {
+  ordno: string;
+  expcode: string;
+  medosu: string;
+  qty: number;
+  price: number;
+  cheqty: number;
+  cheprice: number;
+  ordrem: number;
+  status: string;
+  ordtime: string;
+  hname: string;
+}
+ 
+// ─── CFOAQ00600 기간별 주문 항목 타입 ───────────────────────
+export interface PeriodOrderItem {
+  ordDt: string;       // 주문일 (YYYYMMDD)
+  ordNo: string;       // 주문번호
+  orgOrdNo: string;    // 원주문번호
+  ordTime: string;     // 주문시각
+  isuNm: string;       // 종목명
+  bnsTpNm: string;     // 매매구분 (매수/매도)
+  ordPrc: number;      // 주문가
+  ordQty: number;      // 주문수량
+  ordTpNm: string;     // 주문구분명 (지정가/시장가 등)
+  execTpNm: string;    // 체결구분명
+  execPrc: number;     // 체결가
+  execQty: number;     // 체결수량
+  unercQty: number;    // 미체결수량
+  bnsplAmt: number;    // 매매손익금액
+  fnoIsuNo: string;    // 선물옵션종목번호
+  mrcTpNm: string;     // 정정취소구분명
+}
+ 
+// ════════════════════════════════════════
+// ── 주문 API 함수들 ─────────────────────
+// ════════════════════════════════════════
+ 
+// ─── CFOAT00100: 선물옵션 신규주문 ──────────────────────────
 export async function placeFuturesOrder(
   token: string,
   params: FuturesOrderParams,
@@ -53,11 +104,11 @@ export async function placeFuturesOrder(
         FnoOrdPrc: params.orderType === '03' ? 0 : params.price,
         OrdQty: params.qty,
         FnoTrdPtnCode: params.trdPtnCode ?? '00',
-        FnoOrdPtnCode: '00',  // ✅ 추가
+        FnoOrdPtnCode: '00',
       },
     });
  
-    // OrdNo는 OutBlock2에 있음 (OutBlock1엔 없음)
+    // OrdNo는 OutBlock2에 있음
     const ordNo = data.CFOAT00100OutBlock2?.OrdNo ?? data.CFOAT00100OutBlock1?.OrdNo;
     if (ordNo && Number(ordNo) > 0) {
       return { success: true, ordNo: String(ordNo), message: '주문이 접수되었습니다.' };
@@ -87,7 +138,7 @@ export async function placeFuturesOrder(
   }
 }
  
-// ─── CFOAT00300: 선물옵션 취소주문 ───────────────────────────
+// ─── CFOAT00300: 선물옵션 취소주문 ──────────────────────────
 export interface CancelOrderParams {
   fnoIsuNo: string;
   orgOrdNo: number | string;
@@ -107,19 +158,17 @@ export async function cancelFuturesOrder(
       },
     });
  
-    // OutBlock1 또는 OutBlock2에서 OrdNo 확인
     const ordNo = data.CFOAT00300OutBlock1?.OrdNo ?? data.CFOAT00300OutBlock2?.OrdNo;
     if (ordNo) {
       return { success: true, ordNo: String(ordNo), message: '취소 주문이 접수되었습니다.' };
     }
  
-    // 명시적 실패 코드
     const FAIL_CODES = ['00009', 'IGW40011'];
     if (data.rsp_cd && FAIL_CODES.includes(data.rsp_cd)) {
       return { success: false, message: data.rsp_msg ?? '취소 실패' };
     }
  
-    // 00000 또는 004xx 계열 = 성공 (모의투자 포함)
+    // 00000 또는 004xx 계열 = 성공
     if (data.rsp_cd === '00000' || data.rsp_cd?.startsWith('004')) {
       return { success: true, ordNo: '', message: '취소 주문이 접수되었습니다.' };
     }
@@ -136,21 +185,8 @@ export async function cancelFuturesOrder(
   }
 }
  
-// ─── t0434: 당일 체결/미체결 조회 ────────────────────────────
-export interface FuturesOrderItem {
-  ordno: string;
-  expcode: string;
-  medosu: string;
-  qty: number;
-  price: number;
-  cheqty: number;
-  cheprice: number;
-  ordrem: number;
-  status: string;
-  ordtime: string;
-  hname: string;
-}
- 
+// ─── t0434: 당일 체결/미체결 조회 ───────────────────────────
+// chegb: '0'=전체, '1'=체결, '2'=미체결
 export async function fetchFuturesOrders(
   token: string,
   chegb: '0' | '1' | '2' = '0',
@@ -160,14 +196,14 @@ export async function fetchFuturesOrders(
       t0434InBlock: {
         expcode: '',
         chegb,
-        sortgb: '1',
+        sortgb: '1',  // 1: 주문시간순
         cts_ordno: ' ',
       },
     });
  
     const list: any[] = data.t0434OutBlock1 ?? [];
     return list.map((r: any) => ({
-      ordno: String(r.ordno ?? ''),  // API엔 Number로 전달
+      ordno: String(r.ordno ?? ''),
       expcode: String(r.expcode ?? ''),
       medosu: String(r.medosu ?? ''),
       qty: Number(r.qty ?? 0),
@@ -185,52 +221,47 @@ export async function fetchFuturesOrders(
   }
 }
  
-// ─── CFOAQ00600: 기간별 주문체결내역 조회 ────────────────────
-export interface PeriodOrderItem {
-  ordDt: string;       // 주문일 (YYYYMMDD)
-  ordNo: string;       // 주문번호
-  orgOrdNo: string;    // 원주문번호
-  ordTime: string;     // 주문시각
-  isuNm: string;       // 종목명
-  bnsTpNm: string;     // 매매구분 (매수/매도)
-  ordPrc: number;      // 주문가
-  ordQty: number;      // 주문수량
-  ordTpNm: string;     // 주문구분명 (지정가/시장가 등)
-  execTpNm: string;    // 체결구분명
-  execPrc: number;     // 체결가
-  execQty: number;     // 체결수량
-  unercQty: number;    // 미체결수량
-  bnsplAmt: number;    // 매매손익금액
-  fnoIsuNo: string;    // 선물옵션종목번호
-  mrcTpNm: string;     // 정정취소구분명
-}
- 
+// ─── CFOAQ00600: 기간별 주문체결내역 조회 ───────────────────
+// ✅ 연속조회 추가 → 한달 이상 기간도 전체 조회 가능
+// ✅ IsuNm 필드에 종목명 포함 → t2111 개별 호출 불필요
 export async function fetchPeriodOrders(
   token: string,
   srtDt: string,  // YYYYMMDD
   endDt: string,  // YYYYMMDD
 ): Promise<PeriodOrderItem[]> {
   try {
-    const data = await postApi(token, '/futureoption/accno', 'CFOAQ00600', {
-      CFOAQ00600InBlock1: {
-        RecCnt: 1,
-        QrySrtDt: srtDt,
-        QryEndDt: endDt,
-        FnoClssCode: '00',   // 전체
-        PrdgrpCode: '00',    // 전체
-        PrdtExecTpCode: '0', // 전체
-        StnlnSeqTp: '4',      // 역순
-        CommdaCode: '99',    // 전체
-      },
-    });
+    let allList: any[] = [];
+    let ctsOrdNo = '';  // 연속조회 키 (빈 문자열이면 첫 페이지)
  
-    const list: any[] = data.CFOAQ00600OutBlock3 ?? [];
-    return list.map((r: any) => ({
+    while (true) {
+      const data = await postApi(token, '/futureoption/accno', 'CFOAQ00600', {
+        CFOAQ00600InBlock1: {
+          RecCnt: 1,
+          QrySrtDt: srtDt,
+          QryEndDt: endDt,
+          FnoClssCode: '00',    // 전체 (선물+옵션)
+          PrdgrpCode: '00',     // 전체 상품군
+          PrdtExecTpCode: '0',  // 전체 (체결+미체결)
+          StnlnSeqTp: '4',      // 4: 정순 (오래된 것부터)
+          CommdaCode: '99',     // 전체 통신매체
+          CtsOrdNo: ctsOrdNo,   // 연속조회 키
+        },
+      });
+ 
+      const list: any[] = data.CFOAQ00600OutBlock3 ?? [];
+      allList = [...allList, ...list];
+ 
+      // 연속조회 키 확인 (없으면 마지막 페이지)
+      ctsOrdNo = String(data.CFOAQ00600OutBlock2?.CtsOrdNo ?? '').trim();
+      if (!ctsOrdNo) break;
+    }
+ 
+    return allList.map((r: any) => ({
       ordDt: String(r.OrdDt ?? ''),
       ordNo: String(r.OrdNo ?? ''),
       orgOrdNo: String(r.OrgOrdNo ?? ''),
       ordTime: String(r.OrdTime ?? ''),
-      isuNm: String(r.IsuNm ?? ''),
+      isuNm: String(r.IsuNm ?? ''),        // ✅ 종목명 포함 (t2111 불필요)
       bnsTpNm: String(r.BnsTpNm ?? ''),
       ordPrc: Number(r.OrdPrc ?? 0),
       ordQty: Number(r.OrdQty ?? 0),
@@ -249,7 +280,12 @@ export async function fetchPeriodOrders(
   }
 }
  
+// ════════════════════════════════════════
+// ── 유틸 함수 ───────────────────────────
+// ════════════════════════════════════════
+ 
 // ─── 최대 주문 가능 계약수 계산 ──────────────────────────────
+// 주문가능금액 / (현재가 × 계약승수)
 export function calcMaxQty(
   ordAblAmt: number,
   price: number,

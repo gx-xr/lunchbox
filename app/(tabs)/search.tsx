@@ -51,12 +51,12 @@ type MainTab = 'KP200' | 'KP200W' | 'KQ150' | 'KQ150W';
 interface FutureItem { shcode: string; hname: string; }
  
 function MonthlyOptionBoard({
-  board, futurePrice, spotPrice, spotLabel, jandatecnt, loading, refreshing, onRefresh, market,
+  board, futurePrice, spotPrice, spotLabel, jandatecnt, loading, refreshing, onRefresh, market, yyyymm,
 }: {
   board: OptionBoardItem[]; futurePrice: number; spotPrice?: number;
   spotLabel?: string;
   jandatecnt: number; loading: boolean; refreshing: boolean;
-  onRefresh: () => void; market: 'KP200' | 'KQ150';
+  onRefresh: () => void; market: 'KP200' | 'KQ150'; yyyymm: string;
 }) {
   const router = useRouter();
   const [selectedItem, setSelectedItem] = useState<OptionBoardItem | null>(null);
@@ -77,11 +77,21 @@ function MonthlyOptionBoard({
   }, [atmActprice, board.length]);
  
   const handleAction = (params: { putCode: string; actprice: number; putPrice: number; optionType: 'PUT' | 'CALL'; side: 'BUY' | 'SELL'; isuNm?: string; }) => {
-    //console.log('jandatecnt:', jandatecnt); // 월물옵션 잔여일 확인
+    console.log('jandatecnt:', jandatecnt); // 월물옵션 잔여일 확인
     setSheetVisible(false);
     const mktLabel = market === 'KP200' ? '코스피200' : '코스닥150';
     const optLabel = params.optionType === 'CALL' ? '콜옵션' : '풋옵션';
-    router.push({ pathname: '/order/put-order', params: { putCode: params.putCode, actprice: String(params.actprice), putPrice: String(params.putPrice), market: market === 'KP200' ? 'KOSPI200' : 'KOSDAQ150', optionType: params.optionType, side: params.side, isuNm: params.isuNm ?? `${mktLabel} ${optLabel} ${params.actprice}`, jandatecnt: String(jandatecnt) } });
+    router.push({ pathname: '/order/put-order', params: { 
+      putCode: params.putCode,
+      actprice: String(params.actprice),
+      putPrice: String(params.putPrice), 
+      market: market === 'KP200' ? 'KOSPI200' : 'KOSDAQ150', 
+      optionType: params.optionType, 
+      side: params.side, 
+      isuNm: `${market === 'KP200' ? 'KP' : 'KQ'} ${params.optionType === 'PUT' ? 'P' : 'C'} ${yyyymm.slice(2)} ${params.actprice}`,
+      jandatecnt: String(jandatecnt),
+      weekKey: '',
+    } });
   };
  
   if (loading) return <ActivityIndicator size="large" color="#3182f6" style={{ marginTop: 40 }} />;
@@ -188,7 +198,7 @@ function KP200Tab({ token }: { token: string }) {
       <View style={s.futureRow}>{futures.slice(0, 4).map(f => (<TouchableOpacity key={f.shcode} style={s.futureBtn} onPress={() => router.push({ pathname: '/order/futures', params: { futCode: f.shcode, market: 'KOSPI200' } })}><Text style={s.futureBtnText}>{f.hname}</Text></TouchableOpacity>))}</View>
       <View style={s.maturityRow}><Text style={s.maturityLabel}>만기월</Text><TouchableOpacity ref={dropdownBtnRef} style={[s.dropdownBtn, { marginLeft: 'auto' }]} onPress={openDropdown}><Text style={s.dropdownBtnText}>{selectedLabel}</Text><Text style={s.dropdownArrow}>▼</Text></TouchableOpacity></View>
       <Modal visible={dropdownVisible} transparent animationType="fade" onRequestClose={() => setDropdownVisible(false)}><TouchableOpacity style={s.dropdownOverlay} activeOpacity={1} onPress={() => setDropdownVisible(false)} /><View style={[s.dropdownMenu, { top: dropdownY }]}>{optionMonths.map(m => (<TouchableOpacity key={m.yyyymm} style={[s.dropdownItem, selectedYyyymm === m.yyyymm && s.dropdownItemActive]} onPress={() => { setSelectedYyyymm(m.yyyymm); loadBoard(m.yyyymm); setDropdownVisible(false); }}><Text style={[s.dropdownItemText, selectedYyyymm === m.yyyymm && s.dropdownItemTextActive]}>{m.label}</Text>{selectedYyyymm === m.yyyymm && <Text style={s.dropdownCheck}>✓</Text>}</TouchableOpacity>))}</View></Modal>
-      <MonthlyOptionBoard board={board} futurePrice={futurePrice} spotPrice={spotPrice} jandatecnt={jandatecnt} loading={loading} refreshing={refreshing} onRefresh={onRefresh} market="KP200" />
+      <MonthlyOptionBoard board={board} futurePrice={futurePrice} spotPrice={spotPrice} jandatecnt={jandatecnt} loading={loading} refreshing={refreshing} onRefresh={onRefresh} market="KP200" spotLabel="KP200" yyyymm={selectedYyyymm}/>
     </View>
   );
 }
@@ -231,7 +241,7 @@ function KQ150Tab({ token }: { token: string }) {
       <View style={s.futureRow}>{futures.slice(0, 4).map(f => (<TouchableOpacity key={f.shcode} style={s.futureBtn} onPress={() => router.push({ pathname: '/order/futures', params: { futCode: f.shcode, market: 'KOSDAQ150' } })}><Text style={s.futureBtnText}>{f.hname}</Text></TouchableOpacity>))}</View>
       <View style={s.maturityRow}><Text style={s.maturityLabel}>만기월</Text><TouchableOpacity ref={dropdownBtnRef} style={[s.dropdownBtn, { marginLeft: 'auto' }]} onPress={openDropdown}><Text style={s.dropdownBtnText}>{selectedLabel}</Text><Text style={s.dropdownArrow}>▼</Text></TouchableOpacity></View>
       <Modal visible={dropdownVisible} transparent animationType="fade" onRequestClose={() => setDropdownVisible(false)}><TouchableOpacity style={s.dropdownOverlay} activeOpacity={1} onPress={() => setDropdownVisible(false)} /><View style={[s.dropdownMenu, { top: dropdownY }]}>{optionMonths.map(m => (<TouchableOpacity key={m.yyyymm} style={[s.dropdownItem, selectedYyyymm === m.yyyymm && s.dropdownItemActive]} onPress={() => { setSelectedYyyymm(m.yyyymm); loadBoard(m.yyyymm); setDropdownVisible(false); }}><Text style={[s.dropdownItemText, selectedYyyymm === m.yyyymm && s.dropdownItemTextActive]}>{m.label}</Text>{selectedYyyymm === m.yyyymm && <Text style={s.dropdownCheck}>✓</Text>}</TouchableOpacity>))}</View></Modal>
-      <MonthlyOptionBoard board={board} futurePrice={futurePrice} jandatecnt={jandatecnt} loading={loading} refreshing={refreshing} onRefresh={onRefresh} spotPrice={spotPrice} spotLabel="KQ150" market="KQ150" />
+      <MonthlyOptionBoard board={board} futurePrice={futurePrice} jandatecnt={jandatecnt} loading={loading} refreshing={refreshing} onRefresh={onRefresh} spotPrice={spotPrice} spotLabel="KQ150" market="KQ150" yyyymm={selectedYyyymm}/>
     </View>
   );
 }

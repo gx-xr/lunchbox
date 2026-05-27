@@ -24,6 +24,7 @@ export interface Position {
   pnlRate: number;          // 수익률(%)
   actprice: number;         // 행사가
   currentPrice : number;    // 현재가
+  jandatecnt: number;       // 잔여일
 }
  
 export interface IndexPrice {

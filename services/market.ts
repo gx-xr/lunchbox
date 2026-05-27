@@ -153,7 +153,7 @@ export async function fetchFuturesPrice(token: string, code: string): Promise<{
       high: Number(b.high ?? 0),
       low: Number(b.low ?? 0),
       jnilClose,
-      jandatecnt: Number(b.bjandatecnt ?? 0),
+      jandatecnt: Number(b.jandatecnt ?? b.bjandatecnt ?? 0),
     };
   } catch { return null; }
 }

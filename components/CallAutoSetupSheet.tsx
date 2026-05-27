@@ -1,7 +1,11 @@
 /**
  * components/CallAutoSetupSheet.tsx
- * ✅ 콜매도 자동화 설정 시트
- * ✅ 청산 예약가 + 선물 자동매도 (offerho1 - 0.2p)
+ * ✅ 청산 예약가 체크박스 on/off 추가
+ * ✅ 선물 자동 매도 체크박스 on/off 추가
+ * ✅ 다음 위클리 콜옵션 매도 예약 추가
+ * ✅ weekKey 기반 현재 옵션 필터링
+ * ✅ 선물명 표시 추가
+ * ✅ qty, jandatecnt props 추가 (계약수 디폴트, 만기일 체크용)
  */
 import React, { useEffect, useRef, useState } from 'react';
 import {
@@ -9,12 +13,15 @@ import {
   TextInput, Modal, Animated, Dimensions,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
 } from 'react-native';
-import { useAutoTradingStore, CallTradingEntry } from '../store/autoTradingStore';
+import { useAutoTradingStore, CallTradingEntry, AutoSellConfig } from '../store/autoTradingStore';
 import { useAuthStore } from '../store/authStore';
 import { startAutoTrading } from '../services/autoTrading';
 import { fetchNearFutureCode, fetchNearKqdaqFutureCode } from '../services/market';
+import { fetchKQ150WeeklyCodes, fetchKP200ValidWeeklyKeys } from '../services/options';
  
 const { height: SCREEN_H } = Dimensions.get('window');
+ 
+interface WeekKeyItem { key: string; label: string; }
  
 interface Props {
   visible: boolean;
@@ -25,39 +32,137 @@ interface Props {
   currentPrice: number;
   market: 'KOSPI200' | 'KOSDAQ150';
   ordNo?: string;
+  weekKey?: string;    // 현재 보유 옵션의 위클리 키 (필터링용)
+  qty?: number;        // ✅ 콜옵션 계약수 (hedgeQty 디폴트값)
+  jandatecnt?: number; // ✅ 만기일 체크용 잔여일
 }
  
 export default function CallAutoSetupSheet({
-  visible, onClose, callCode, callName, actprice, currentPrice, market, ordNo,
+  visible, onClose, callCode, callName, actprice, currentPrice, market, ordNo, weekKey, qty, jandatecnt,
 }: Props) {
   const slideAnim = useRef(new Animated.Value(SCREEN_H)).current;
  
+  // ─── 청산 예약가 ───────────────────────────────────────────
+  const [closingEnabled, setClosingEnabled] = useState(true);
   const [closingPrice, setClosingPrice] = useState('0.20');
-  const [hedgeQty, setHedgeQty] = useState('1');
+ 
+  // ─── 선물 자동 매도 ─────────────────────────────────────────
+  const [hedgeEnabled, setHedgeEnabled] = useState(true);
+  // ✅ hedgeQty 디폴트값 → 콜옵션 계약수(qty)로 수정
+  const [hedgeQty, setHedgeQty] = useState(String(qty ?? 1));
   const [futuresCode, setFuturesCode] = useState<string | null>(null);
+  const [futuresName, setFuturesName] = useState<string | null>(null);
   const [loadingCode, setLoadingCode] = useState(false);
  
+  // ─── 다음 위클리 콜옵션 매도 예약 ───────────────────────────
+  const [autoSellEnabled, setAutoSellEnabled] = useState(false);
+  const [nextWeeklyKeys, setNextWeeklyKeys] = useState<WeekKeyItem[]>([]);
+  const [selectedNextWeekly, setSelectedNextWeekly] = useState('');
+  const [sellTimeHH, setSellTimeHH] = useState('15');
+  const [sellTimeMM, setSellTimeMM] = useState('10');
+  const [gapThreshold, setGapThreshold] = useState(market === 'KOSPI200' ? '50' : '10');
+  const [priceThreshold, setPriceThreshold] = useState('7');
+  const [autoSellQty, setAutoSellQty] = useState('1');
+  const [loadingWeekly, setLoadingWeekly] = useState(false);
+ 
   const addCallEntry = useAutoTradingStore((s) => s.addCallEntry);
+  const addAutoSellConfig = useAutoTradingStore((s) => s.addAutoSellConfig);
   const isRunning = useAutoTradingStore((s) => s.isRunning);
   const token = useAuthStore((s) => s.token) ?? '';
   const acntNo = useAuthStore((s) => s.acntNo) ?? '';
  
   const marketName = market === 'KOSPI200' ? '코스피200' : '코스닥150';
  
+  // ✅ qty가 바뀔 때 hedgeQty도 업데이트
+  useEffect(() => {
+    setHedgeQty(String(qty ?? 1));
+  }, [qty]);
+ 
+  // ─── 시트 열릴 때 선물 코드 + 다음 위클리 목록 조회 ──────────
   useEffect(() => {
     if (!visible || !token) return;
+    console.log('CallAutoSetupSheet market:', market, 'qty:', qty, 'jandatecnt:', jandatecnt);
  
     setFuturesCode(null);
+    setFuturesName(null);
     setLoadingCode(true);
     const fetchFutures = market === 'KOSPI200'
       ? fetchNearFutureCode(token)
       : fetchNearKqdaqFutureCode(token);
     fetchFutures
-      .then((code) => setFuturesCode(code))
+      .then(async (code) => {
+        setFuturesCode(code);
+        try {
+          const res = await fetch('https://openapi.ls-sec.co.kr:8080/futureoption/market-data', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json; charset=utf-8',
+              'authorization': `Bearer ${token}`,
+              'tr_cd': 't2111', 'tr_cont': 'N', 'tr_cont_key': '0', 'mac_address': '',
+            },
+            body: JSON.stringify({ t2111InBlock: { focode: code } }),
+          });
+          const data = await res.json();
+          setFuturesName(data?.t2111OutBlock?.hname ?? null);
+        } catch {}
+      })
       .catch(() => setFuturesCode(market === 'KOSPI200' ? 'A0166000' : 'A0666000'))
       .finally(() => setLoadingCode(false));
+ 
+    setLoadingWeekly(true);
+    loadNextWeeklyKeys(weekKey);
   }, [visible, token, market]);
  
+  // ─── 다음 위클리 목록 조회 ──────────────────────────────────
+  const loadNextWeeklyKeys = async (currentWeekKey?: string) => {
+    try {
+      let keys: WeekKeyItem[] = [];
+ 
+      if (market === 'KOSDAQ150') {
+        const codes = await fetchKQ150WeeklyCodes(token);
+        const today = new Date();
+        const year = today.getFullYear();
+        const month = today.getMonth();
+        const todayDate = today.getDate();
+        const daysInMonth = new Date(year, month + 1, 0).getDate();
+        const unique = [...new Set(codes.map(c => `${c.week}${c.weekDay}`))];
+        const withDates = unique.map(key => {
+          const weekNum = parseInt(key.slice(1, 2));
+          const isMonday = key.endsWith('MON');
+          const targetDay = isMonday ? 1 : 4;
+          let count = 0, actualDate = 999;
+          for (let d = 1; d <= daysInMonth; d++) {
+            if (new Date(year, month, d).getDay() === targetDay) {
+              count++;
+              if (count === weekNum) { actualDate = d; break; }
+            }
+          }
+          return { key, label: `${weekNum}주 ${isMonday ? '월요일' : '목요일'}`, actualDate };
+        });
+        keys = withDates
+          .filter(k => k.actualDate > todayDate)
+          .sort((a, b) => a.actualDate - b.actualDate)
+          .map(({ actualDate, ...k }) => k);
+      } else {
+        const { keys: kp200Keys } = await fetchKP200ValidWeeklyKeys(token);
+        const uniqueKeys = kp200Keys.filter(
+          (k, i, arr) => arr.findIndex(x => x.yyyymm === k.yyyymm) === i
+        );
+        keys = uniqueKeys
+          .filter(k => k.yyyymm !== currentWeekKey)
+          .map(k => ({ key: k.yyyymm, label: k.label }));
+      }
+ 
+      setNextWeeklyKeys(keys);
+      if (keys.length > 0) setSelectedNextWeekly(keys[0].key);
+    } catch (e) {
+      console.log('다음 위클리 조회 에러:', e);
+    } finally {
+      setLoadingWeekly(false);
+    }
+  };
+ 
+  // ─── 시트 슬라이드 애니메이션 ───────────────────────────────
   useEffect(() => {
     if (visible) {
       Animated.spring(slideAnim, { toValue: 0, useNativeDriver: true, bounciness: 4 }).start();
@@ -66,6 +171,7 @@ export default function CallAutoSetupSheet({
     }
   }, [visible]);
  
+  // ─── 조정 함수들 ────────────────────────────────────────────
   function adjustClosingPrice(delta: number) {
     const cur = parseFloat(closingPrice) || 0.20;
     const next = Math.max(0.01, parseFloat((cur + delta * 0.01).toFixed(2)));
@@ -77,6 +183,23 @@ export default function CallAutoSetupSheet({
     setHedgeQty(String(next));
   }
  
+  function adjustGapThreshold(delta: number) {
+    const next = Math.max(1, (parseInt(gapThreshold) || 30) + delta);
+    setGapThreshold(String(next));
+  }
+ 
+  function adjustAutoSellQty(delta: number) {
+    const next = Math.max(1, (parseInt(autoSellQty) || 1) + delta);
+    setAutoSellQty(String(next));
+  }
+ 
+  function getSellTimeStr(): string {
+    const hh = sellTimeHH.padStart(2, '0');
+    const mm = sellTimeMM.padStart(2, '0');
+    return `${hh}:${mm}`;
+  }
+ 
+  // ─── 자동화 시작 ────────────────────────────────────────────
   async function handleStart() {
     if (!futuresCode) return;
  
@@ -85,22 +208,46 @@ export default function CallAutoSetupSheet({
       callName,
       actprice,
       market,
-      closingPrice: parseFloat(closingPrice) || 0.20,
-      hedgeQty: parseInt(hedgeQty) || 1,
+      closingPrice: closingEnabled ? (parseFloat(closingPrice) || 0.20) : 0,
+      hedgeQty: hedgeEnabled ? (parseInt(hedgeQty) || 1) : 0,
       futuresCode,
       status: 'monitoring',
       currentPrice,
       registeredAt: new Date().toLocaleTimeString('ko-KR'),
       acntNo,
-      averageBasis: 0,         // 베이시스는 15:00 이후 자동 계산
+      averageBasis: 0,
       basisCalculatedAt: '',
+      jandatecnt: jandatecnt ?? 0, // ✅ 잔여일 저장
     };
     addCallEntry(entry);
+ 
+    if (autoSellEnabled && selectedNextWeekly) {
+      const found = nextWeeklyKeys.find(k => k.key === selectedNextWeekly);
+      const config: AutoSellConfig = {
+        enabled: true,
+        market,
+        nextWeeklyKey: selectedNextWeekly,
+        nextWeeklyLabel: found?.label ?? selectedNextWeekly,
+        sellTime: getSellTimeStr(),
+        gapThreshold: parseInt(gapThreshold) || (market === 'KOSPI200' ? 50 : 10),
+        priceThreshold: parseInt(priceThreshold) || 7,
+        qty: parseInt(autoSellQty) || 1,
+        actprice,
+        acntNo,
+        sold: false,
+        checked: false,
+        isCall: true,
+      };
+      addAutoSellConfig(config);
+    }
  
     if (!isRunning) await startAutoTrading();
     onClose();
   }
  
+  // ════════════════════════════════════════
+  // ── UI 렌더링 ───────────────────────────
+  // ════════════════════════════════════════
   if (!visible) return null;
  
   return (
@@ -124,7 +271,7 @@ export default function CallAutoSetupSheet({
               </View>
             ) : null}
  
-            {/* 종목 정보 */}
+            {/* ── 종목 정보 카드 ── */}
             <View style={s.infoCard}>
               <View style={s.infoTopRow}>
                 <View style={{ flex: 1 }}>
@@ -138,79 +285,250 @@ export default function CallAutoSetupSheet({
                 <Text style={s.infoVal}>{actprice.toLocaleString()}</Text>
               </View>
               <View style={s.infoRow}>
-                <Text style={s.infoSub}>현재 옵션가</Text>
+                <Text style={s.infoSub}>옵션가</Text>
                 <Text style={[s.infoVal, { color: '#f04452' }]}>{currentPrice.toFixed(2)}</Text>
               </View>
-            </View>
- 
-            {/* 청산 예약가 */}
-            <View style={s.section}>
-              <View style={s.sectionHeader}>
-                <Text style={s.sectionTitle}>💰 청산 예약가</Text>
-                <Text style={s.sectionSub}>옵션가가 이 가격 이하면 자동 청산 (매수)</Text>
-              </View>
-              <View style={s.inputRow}>
-                <TouchableOpacity style={s.adjBtn} onPress={() => adjustClosingPrice(-1)}>
-                  <Text style={s.adjText}>－</Text>
-                </TouchableOpacity>
-                <TextInput
-                  style={s.inputBox} value={closingPrice}
-                  onChangeText={setClosingPrice} keyboardType="numeric" textAlign="center"
-                />
-                <TouchableOpacity style={s.adjBtn} onPress={() => adjustClosingPrice(1)}>
-                  <Text style={s.adjText}>＋</Text>
-                </TouchableOpacity>
-              </View>
-              <View style={s.quickRow}>
-                {['0.05', '0.10', '0.20', '0.30'].map((v) => (
-                  <TouchableOpacity
-                    key={v} style={[s.quickBtn, closingPrice === v && s.quickBtnActive]}
-                    onPress={() => setClosingPrice(v)}
-                  >
-                    <Text style={[s.quickText, closingPrice === v && s.quickTextActive]}>{v}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            </View>
- 
-            {/* 선물 자동 매도 */}
-            <View style={s.section}>
-              <View style={s.sectionHeader}>
-                <Text style={s.sectionTitle}>🪙 선물 자동 매도</Text>
-                <Text style={s.sectionSub}>행사가 {'<'} 추정현물가 시 실행 (15:30)</Text>
-              </View>
+              {/* ✅ 잔여일 표시 */}
               <View style={s.infoRow}>
-                <Text style={s.infoSub}>근월물 코드</Text>
-                {loadingCode ? (
-                  <ActivityIndicator size="small" color="#3182f6" />
-                ) : (
-                  <Text style={s.infoVal}>{futuresCode ?? '-'}</Text>
-                )}
-              </View>
-              <View style={s.inputRow}>
-                <TouchableOpacity style={s.adjBtn} onPress={() => adjustHedgeQty(-1)}>
-                  <Text style={s.adjText}>－</Text>
-                </TouchableOpacity>
-                <TextInput
-                  style={s.inputBox} value={`${hedgeQty} 계약`}
-                  onChangeText={(v) => setHedgeQty(v.replace(/[^0-9]/g, ''))}
-                  keyboardType="numeric" textAlign="center"
-                />
-                <TouchableOpacity style={s.adjBtn} onPress={() => adjustHedgeQty(1)}>
-                  <Text style={s.adjText}>＋</Text>
-                </TouchableOpacity>
-              </View>
- 
-              {/* 로직 요약 */}
-              <View style={s.condSummary}>
-                <Text style={s.condText}>
-                  📊 15:00~15:19 분봉 10개로 평균 베이시스 계산{'\n'}
-                  추정현물가 = 선물 예상체결가 - 평균베이시스{'\n'}
-                  {'\n'}
-                  ✅ 행사가 {actprice} {'<'} 추정현물가 → 선물매도{'\n'}
-                  매도가: offerho1 - 0.2p
+                <Text style={s.infoSub}>잔여일</Text>
+                <Text style={[s.infoVal, { color: (jandatecnt ?? 0) <= 1 ? '#f04452' : '#1a1a1a' }]}>
+                  {jandatecnt !== undefined ? `${jandatecnt}일` : '-'}
                 </Text>
               </View>
+            </View>
+ 
+            {/* ── 청산 예약가 ── */}
+            <View style={[s.section, closingEnabled && s.sectionClosing]}>
+              <TouchableOpacity
+                style={s.checkRow}
+                onPress={() => setClosingEnabled(!closingEnabled)}
+                activeOpacity={0.7}
+              >
+                <View style={[s.checkbox, closingEnabled && s.checkboxClosing]}>
+                  {closingEnabled && <Text style={s.checkmark}>✓</Text>}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.sectionTitle}>💰 청산 예약가</Text>
+                  <Text style={s.sectionSub}>옵션가가 이 가격 이하면 자동 청산 (매수)</Text>
+                </View>
+              </TouchableOpacity>
+ 
+              {closingEnabled && (
+                <View style={{ marginTop: 14 }}>
+                  <View style={s.inputRow}>
+                    <TouchableOpacity style={s.adjBtn} onPress={() => adjustClosingPrice(-1)}>
+                      <Text style={s.adjText}>－</Text>
+                    </TouchableOpacity>
+                    <TextInput
+                      style={s.inputBox} value={closingPrice}
+                      onChangeText={setClosingPrice} keyboardType="numeric" textAlign="center"
+                    />
+                    <TouchableOpacity style={s.adjBtn} onPress={() => adjustClosingPrice(1)}>
+                      <Text style={s.adjText}>＋</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={s.quickRow}>
+                    {['0.05', '0.10', '0.20', '0.30'].map((v) => (
+                      <TouchableOpacity
+                        key={v} style={[s.quickBtn, closingPrice === v && s.quickBtnActive]}
+                        onPress={() => setClosingPrice(v)}
+                      >
+                        <Text style={[s.quickText, closingPrice === v && s.quickTextActive]}>{v}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                </View>
+              )}
+            </View>
+ 
+            {/* ── 선물 자동 매도 ── */}
+            <View style={[s.section, hedgeEnabled && s.sectionHedge]}>
+              <TouchableOpacity
+                style={s.checkRow}
+                onPress={() => setHedgeEnabled(!hedgeEnabled)}
+                activeOpacity={0.7}
+              >
+                <View style={[s.checkbox, hedgeEnabled && s.checkboxHedge]}>
+                  {hedgeEnabled && <Text style={s.checkmark}>✓</Text>}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.sectionTitle}>🪙 선물 자동 매도</Text>
+                  <Text style={s.sectionSub}>추정현물가 {'>'} 행사가 시 실행 (15:30~15:35)</Text>
+                </View>
+              </TouchableOpacity>
+ 
+              {hedgeEnabled && (
+                <View style={{ marginTop: 14 }}>
+                  <View style={s.infoRow}>
+                    <Text style={s.infoSub}>근월물 코드</Text>
+                    {loadingCode ? (
+                      <ActivityIndicator size="small" color="#3182f6" />
+                    ) : (
+                      <Text style={s.infoVal}>{futuresCode ?? '-'}</Text>
+                    )}
+                  </View>
+                  {futuresName && (
+                    <Text style={[s.infoSub, { color: '#1a1a1a', fontWeight: '700', marginBottom: 8 }]}>
+                      {futuresName}
+                    </Text>
+                  )}
+                  {/* ✅ 디폴트값이 콜옵션 계약수로 설정됨 */}
+                  <View style={s.inputRow}>
+                    <TouchableOpacity style={s.adjBtn} onPress={() => adjustHedgeQty(-1)}>
+                      <Text style={s.adjText}>－</Text>
+                    </TouchableOpacity>
+                    <TextInput
+                      style={s.inputBox} value={`${hedgeQty}계약`}
+                      onChangeText={(v) => setHedgeQty(v.replace(/[^0-9]/g, ''))}
+                      keyboardType="numeric" textAlign="center"
+                    />
+                    <TouchableOpacity style={s.adjBtn} onPress={() => adjustHedgeQty(1)}>
+                      <Text style={s.adjText}>＋</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {/* <View style={s.condSummary}>
+                    <Text style={s.condText}>
+                      📊 15:10~15:20 선물가 - 현물가 수집 (30초마다 최대 10개){'\n'}
+                      평균현물가 {'>'} 행사가 {actprice} → 선물매도{'\n'}
+                      매도호가: bidho1 그대로
+                    </Text>
+                  </View> */}
+                </View>
+              )}
+            </View>
+ 
+            {/* ── 다음 위클리 콜옵션 매도 예약 ── */}
+            <View style={[s.section, autoSellEnabled && s.sectionActive]}>
+              <TouchableOpacity
+                style={s.checkRow}
+                onPress={() => setAutoSellEnabled(!autoSellEnabled)}
+                activeOpacity={0.7}
+              >
+                <View style={[s.checkbox, autoSellEnabled && s.checkboxChecked]}>
+                  {autoSellEnabled && <Text style={s.checkmark}>✓</Text>}
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={s.sectionTitle}>다음 위클리 콜옵션 매도 예약</Text>
+                  <Text style={s.sectionSub}>조건 충족 시 다음 만기 콜옵션 자동 매도</Text>
+                </View>
+              </TouchableOpacity>
+ 
+              {autoSellEnabled && (
+                <View style={s.autoSellBody}>
+                  <Text style={s.inputLabel}>다음 위클리</Text>
+                  {loadingWeekly ? (
+                    <ActivityIndicator size="small" color="#10b981" style={{ marginBottom: 12 }} />
+                  ) : (
+                    <View style={s.weekBtnRow}>
+                      {nextWeeklyKeys.map(k => (
+                        <TouchableOpacity
+                          key={k.key}
+                          style={[s.weekBtn, selectedNextWeekly === k.key && s.weekBtnActive]}
+                          onPress={() => setSelectedNextWeekly(k.key)}
+                        >
+                          <Text style={[s.weekBtnText, selectedNextWeekly === k.key && s.weekBtnTextActive]}>
+                            {k.label}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </View>
+                  )}
+ 
+                  <Text style={s.inputLabel}>매도 시점</Text>
+                  <View style={s.timeRow}>
+                    <TextInput
+                      style={s.timePartInput}
+                      value={sellTimeHH}
+                      onChangeText={(v) => setSellTimeHH(v.replace(/[^0-9]/g, '').slice(0, 2))}
+                      keyboardType="numeric" placeholder="15" maxLength={2} textAlign="center"
+                    />
+                    <Text style={s.timeSep}>:</Text>
+                    <TextInput
+                      style={s.timePartInput}
+                      value={sellTimeMM}
+                      onChangeText={(v) => setSellTimeMM(v.replace(/[^0-9]/g, '').slice(0, 2))}
+                      keyboardType="numeric" placeholder="10" maxLength={2} textAlign="center"
+                    />
+                  </View>
+ 
+                  <Text style={[s.inputLabel, { marginTop: 12 }]}>기준 차이값 (내 행사가 - 현물가 ≥ ?)</Text>
+                  <View style={s.inputRow}>
+                    <TouchableOpacity style={s.adjBtn} onPress={() => adjustGapThreshold(-5)}>
+                      <Text style={s.adjText}>－</Text>
+                    </TouchableOpacity>
+                    <TextInput
+                      style={s.inputBox} value={gapThreshold}
+                      onChangeText={v => setGapThreshold(v.replace(/[^0-9]/g, ''))}
+                      keyboardType="numeric" textAlign="center"
+                    />
+                    <TouchableOpacity style={s.adjBtn} onPress={() => adjustGapThreshold(5)}>
+                      <Text style={s.adjText}>＋</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={s.quickRow}>
+                    {['10', '20', '30', '50'].map((v) => (
+                      <TouchableOpacity
+                        key={v} style={[s.quickBtn, gapThreshold === v && s.quickBtnActive]}
+                        onPress={() => setGapThreshold(v)}
+                      >
+                        <Text style={[s.quickText, gapThreshold === v && s.quickTextActive]}>{v}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+ 
+                  <Text style={[s.inputLabel, { marginTop: 12 }]}>지정호가 (매수호가 ≥ ?)</Text>
+                  <View style={s.quickRow}>
+                    {['3', '5', '7', '10', '15'].map((v) => (
+                      <TouchableOpacity
+                        key={v} style={[s.quickBtn, priceThreshold === v && s.quickBtnActive]}
+                        onPress={() => setPriceThreshold(v)}
+                      >
+                        <Text style={[s.quickText, priceThreshold === v && s.quickTextActive]}>{v}</Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+ 
+                  <Text style={[s.inputLabel, { marginTop: 12 }]}>계약수</Text>
+                  <View style={s.inputRow}>
+                    <TouchableOpacity style={s.adjBtn} onPress={() => adjustAutoSellQty(-1)}>
+                      <Text style={s.adjText}>－</Text>
+                    </TouchableOpacity>
+                    <TextInput
+                      style={s.inputBox} value={`${autoSellQty}계약`}
+                      onChangeText={(v) => setAutoSellQty(v.replace(/[^0-9]/g, ''))}
+                      keyboardType="numeric" textAlign="center"
+                    />
+                    <TouchableOpacity style={s.adjBtn} onPress={() => adjustAutoSellQty(1)}>
+                      <Text style={s.adjText}>＋</Text>
+                    </TouchableOpacity>
+                  </View>
+ 
+                  <View style={s.condSummary}>
+                    <Text style={s.condText}>
+                      📋 {sellTimeHH.padStart(2, '0')}:{sellTimeMM.padStart(2, '0')} 내 행사가 - 현물가 {'>'} {gapThreshold}{'\n'}
+                      → {nextWeeklyKeys.find(k => k.key === selectedNextWeekly)?.label ?? ''} OTM 콜 탐색{'\n'}
+                      매수호가 ≥ {priceThreshold} AND 스프레드 ≤ {market === 'KOSPI200' ? '0.2' : '1.3'}{'\n'}
+                      → {autoSellQty}계약 매수호가로 매도
+                    </Text>
+                  </View>
+                </View>
+              )}
+            </View>
+ 
+            {/* ── 장마감 자동처리 요약 ── */}
+            <View style={s.timeCard}>
+              <Text style={s.timeTitle}>⏰ 장마감 자동처리</Text>
+              {[
+                ...(autoSellEnabled ? [[`${sellTimeHH.padStart(2, '0')}:${sellTimeMM.padStart(2, '0')}~`, '다음 위클리 콜매도 조건 체크']] : []),
+                ['15:10~15:20', 'Basis 수집 (선물가 - 현물가, 30초마다 최대 10개)'],
+                ...(hedgeEnabled ? [['15:30~15:35', `추정현물가 > 행사가 시 선물 ${hedgeQty}계약 매도 (만기일 당일만)`]] : []),
+                ['15:45', '자동매매 종료'],
+              ].map(([time, desc]) => (
+                <View key={time} style={s.timeCardRow}>
+                  <Text style={s.timeLabel}>{time}</Text>
+                  <Text style={s.timeDesc}>{desc}</Text>
+                </View>
+              ))}
             </View>
  
             <View style={s.btnRow}>
@@ -260,9 +578,30 @@ const s = StyleSheet.create({
   infoSub: { fontSize: 13, color: '#888' },
   infoVal: { fontSize: 14, fontWeight: '700', color: '#1a1a1a' },
   section: { backgroundColor: '#fff', borderRadius: 14, padding: 16, marginBottom: 12, borderWidth: 1, borderColor: '#f0f0f0' },
-  sectionHeader: { marginBottom: 14 },
+  sectionClosing: { borderColor: '#f59e0b', backgroundColor: '#fffbeb' },
+  sectionHedge: { borderColor: '#3182f6', backgroundColor: '#eff6ff' },
+  sectionActive: { borderColor: '#10b981', backgroundColor: '#f0fdf4' },
   sectionTitle: { fontSize: 14, fontWeight: '700', color: '#1a1a1a', marginBottom: 4 },
   sectionSub: { fontSize: 12, color: '#aaa' },
+  checkRow: { flexDirection: 'row', alignItems: 'center', gap: 12 },
+  checkbox: { width: 24, height: 24, borderRadius: 6, borderWidth: 2, borderColor: '#ddd', backgroundColor: '#fff', alignItems: 'center', justifyContent: 'center' },
+  checkboxClosing: { borderColor: '#f59e0b', backgroundColor: '#f59e0b' },
+  checkboxHedge: { borderColor: '#3182f6', backgroundColor: '#3182f6' },
+  checkboxChecked: { borderColor: '#10b981', backgroundColor: '#10b981' },
+  checkmark: { color: '#fff', fontSize: 14, fontWeight: '800' },
+  autoSellBody: { marginTop: 16 },
+  inputLabel: { fontSize: 12, color: '#888', fontWeight: '600', marginBottom: 8 },
+  timeRow: { flexDirection: 'row', alignItems: 'center', gap: 8, marginBottom: 4 },
+  timePartInput: {
+    flex: 1, height: 48, backgroundColor: '#f5f6f8', borderRadius: 12,
+    fontSize: 20, fontWeight: '700', color: '#1a1a1a', textAlign: 'center',
+  },
+  timeSep: { fontSize: 22, fontWeight: '800', color: '#1a1a1a' },
+  weekBtnRow: { flexDirection: 'row', gap: 8, flexWrap: 'wrap', marginBottom: 12 },
+  weekBtn: { paddingHorizontal: 14, paddingVertical: 8, borderRadius: 10, borderWidth: 1.5, borderColor: '#e0e0e0' },
+  weekBtnActive: { borderColor: '#10b981', backgroundColor: '#f0fdf4' },
+  weekBtnText: { fontSize: 13, fontWeight: '600', color: '#aaa' },
+  weekBtnTextActive: { color: '#10b981' },
   condSummary: { backgroundColor: '#eff6ff', borderRadius: 10, padding: 12, marginTop: 12, borderWidth: 1, borderColor: '#bfdbfe' },
   condText: { fontSize: 12, color: '#1e40af', lineHeight: 20 },
   inputRow: { flexDirection: 'row', alignItems: 'center', gap: 10 },
@@ -274,6 +613,11 @@ const s = StyleSheet.create({
   quickBtnActive: { backgroundColor: '#3182f6' },
   quickText: { fontSize: 13, fontWeight: '600', color: '#888' },
   quickTextActive: { color: '#fff' },
+  timeCard: { backgroundColor: '#fffbeb', borderRadius: 14, padding: 16, marginBottom: 20, borderWidth: 1, borderColor: '#fde68a' },
+  timeTitle: { fontSize: 13, fontWeight: '700', color: '#92400e', marginBottom: 10 },
+  timeCardRow: { flexDirection: 'row', gap: 12, marginBottom: 6 },
+  timeLabel: { fontSize: 12, fontWeight: '700', color: '#b45309', width: 120 },
+  timeDesc: { fontSize: 12, color: '#78716c', flex: 1 },
   btnRow: { flexDirection: 'row', gap: 10 },
   skipBtn: { flex: 1, paddingVertical: 16, borderRadius: 14, backgroundColor: '#f5f6f8', alignItems: 'center' },
   skipText: { fontSize: 15, fontWeight: '700', color: '#888' },

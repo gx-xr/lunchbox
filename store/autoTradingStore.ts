@@ -3,6 +3,7 @@
  * ✅ priceMargin 제거 (매수호가 그대로 주문)
  * ✅ CallTradingEntry 추가 (콜매도 자동화)
  * ✅ AutoSellConfig qty 추가 (다음 위클리 계약수)
+ * ✅ AutoTradingEntry jandatecnt 추가 (만기일 체크용)
  */
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -18,16 +19,17 @@ export interface AutoTradingEntry {
   closingPrice: number;
   hedgeQty: number;
   futuresCode: string;
-  status: 'monitoring' | 'closed' | 'hedged';
+  status: 'monitoring' | 'closing' | 'closed' | 'hedged';
   currentPrice: number;
   registeredAt: string;
   acntNo: string;
   emaEnabled: boolean;
   averageBasis: number;
   basisCalculatedAt: string;
+  jandatecnt: number; // 만기일 체크용 잔여일
 }
  
-// ─── 콜매도 자동화 엔트리 ✅ ──────────────────────────────────
+// ─── 콜매도 자동화 엔트리 ──────────────────────────────────
 export interface CallTradingEntry {
   callCode: string;
   callName: string;
@@ -36,12 +38,13 @@ export interface CallTradingEntry {
   closingPrice: number;
   hedgeQty: number;
   futuresCode: string;
-  status: 'monitoring' | 'closed' | 'hedged';
+  status: 'monitoring' | 'closing' | 'closed' | 'hedged';
   currentPrice: number;
   registeredAt: string;
   acntNo: string;
   averageBasis: number;
   basisCalculatedAt: string;
+  jandatecnt: number; // 만기일 체크용 잔여일
 }
  
 // ─── 자동 풋매도 설정 ─────────────────────────────────────────
@@ -53,12 +56,13 @@ export interface AutoSellConfig {
   sellTime: string;       // "15:10" 형식
   gapThreshold: number;
   priceThreshold: number;
-  qty: number;            // ✅ 계약수 (디폴트 1)
-  actprice: number;       // ✅ 내가 매도한 풋옵션 행사가 (조건1 체크용)
+  qty: number;            // 계약수 (디폴트 1)
+  actprice: number;       // 내가 매도한 풋옵션 행사가 (조건1 체크용)
   acntNo: string;
   sold: boolean;
   soldOrdNo?: string;
   checked: boolean;
+  isCall?: boolean; // 콜옵션 매도 여부 (없으면 풋옵션)
 }
  
 export interface AutoTradingLog {
@@ -208,13 +212,20 @@ export const useAutoTradingStore = create<AutoTradingState>()(
       setFutures1530Done: (v) => set({ futures1530Done: v }),
       setFutures1545Done: (v) => set({ futures1545Done: v }),
  
+      // 만기일 당일(jandatecnt <= 1) 항목만 삭제, 나머지는 유지
       resetDaily: () => set((s) => {
         const acntNo = useAuthStore.getState().acntNo ?? '';
         return {
           futures1530Done: false,
           futures1545Done: false,
-          entries: s.entries.filter((e) => e.acntNo !== acntNo),
-          callEntries: s.callEntries.filter((e) => e.acntNo !== acntNo),
+          // 풋매도: 만기일 당일만 삭제, 나머지 유지
+          entries: s.entries.filter((e) =>
+            e.acntNo !== acntNo || e.jandatecnt > 1
+          ),
+          // 콜매도: 만기일 당일만 삭제, 나머지 유지
+          callEntries: s.callEntries.filter((e) =>
+            e.acntNo !== acntNo || e.jandatecnt > 1
+          ),
           autoSellConfigs: s.autoSellConfigs.map((c) =>
             c.acntNo === acntNo
               ? { ...c, sold: false, soldOrdNo: undefined, checked: false }

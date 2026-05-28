@@ -13,6 +13,7 @@ import {
   View, Text, StyleSheet, TouchableOpacity,
   TextInput, Modal, Animated, Dimensions,
   KeyboardAvoidingView, Platform, ScrollView, ActivityIndicator,
+  Alert,
 } from 'react-native';
 import { useAutoTradingStore, AutoTradingEntry, AutoSellConfig } from '../store/autoTradingStore';
 import { useAuthStore } from '../store/authStore';
@@ -206,6 +207,18 @@ export default function AutoSetupSheet({
   // ─── 자동화 시작 ────────────────────────────────────────────
   async function handleStart() {
     if (!futuresCode) return;
+
+    // ─── 중복 등록 체크 ──────────────────────────────────────────
+    const store = useAutoTradingStore.getState();
+    const existing = store.getCurrentEntries().find(e => e.putCode === putCode);
+    if (existing) {
+      Alert.alert(
+        '이미 등록된 종목',
+        '이미 자동화가 등록되어 있는 종목입니다.\n수정하려면 삭제 후 다시 등록해주세요.',
+        [{ text: '확인' }]
+      );
+      return;
+    }
  
     const entry: AutoTradingEntry = {
       putCode, putName, actprice, market,

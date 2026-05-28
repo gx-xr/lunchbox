@@ -4,6 +4,7 @@
  * ✅ CallTradingEntry 추가 (콜매도 자동화)
  * ✅ AutoSellConfig qty 추가 (다음 위클리 계약수)
  * ✅ AutoTradingEntry jandatecnt 추가 (만기일 체크용)
+ * ✅ futures1530DoneDate/futures1545DoneDate 추가 (날짜 기반 리셋)
  */
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
@@ -78,7 +79,9 @@ interface AutoTradingState {
   autoSellConfigs: AutoSellConfig[];
   logs: AutoTradingLog[];
   futures1530Done: boolean;
+  futures1530DoneDate: string; // 날짜 기반 리셋용 (YYYY-MM-DD)
   futures1545Done: boolean;
+  futures1545DoneDate: string; // 날짜 기반 리셋용 (YYYY-MM-DD)
  
   setRunning: (v: boolean) => void;
  
@@ -124,7 +127,9 @@ export const useAutoTradingStore = create<AutoTradingState>()(
       autoSellConfigs: [],
       logs: [],
       futures1530Done: false,
+      futures1530DoneDate: '', // 날짜 기반 리셋용 초기값
       futures1545Done: false,
+      futures1545DoneDate: '', // 날짜 기반 리셋용 초기값
  
       setRunning: (v) => set({ isRunning: v }),
  
@@ -209,15 +214,25 @@ export const useAutoTradingStore = create<AutoTradingState>()(
       // ─── 공통 ────────────────────────────────────────────────
       addLog: (log) => set((s) => ({ logs: [log, ...s.logs].slice(0, 100) })),
       clearLogs: () => set({ logs: [] }),
-      setFutures1530Done: (v) => set({ futures1530Done: v }),
-      setFutures1545Done: (v) => set({ futures1545Done: v }),
+ 
+      // 날짜 기반 중복 방지: true 세팅 시 오늘 날짜(YYYY-MM-DD) 함께 저장
+      setFutures1530Done: (v) => set({
+        futures1530Done: v,
+        futures1530DoneDate: v ? new Date().toISOString().slice(0, 10) : '',
+      }),
+      setFutures1545Done: (v) => set({
+        futures1545Done: v,
+        futures1545DoneDate: v ? new Date().toISOString().slice(0, 10) : '',
+      }),
  
       // 만기일 당일(jandatecnt <= 1) 항목만 삭제, 나머지는 유지
       resetDaily: () => set((s) => {
         const acntNo = useAuthStore.getState().acntNo ?? '';
         return {
           futures1530Done: false,
+          futures1530DoneDate: '',
           futures1545Done: false,
+          futures1545DoneDate: '',
           // 풋매도: 만기일 당일만 삭제, 나머지 유지
           entries: s.entries.filter((e) =>
             e.acntNo !== acntNo || e.jandatecnt > 1
@@ -294,7 +309,9 @@ export const useAutoTradingStore = create<AutoTradingState>()(
         callEntries: state.callEntries,
         autoSellConfigs: state.autoSellConfigs,
         futures1530Done: state.futures1530Done,
+        futures1530DoneDate: state.futures1530DoneDate, // 날짜 기반 리셋용
         futures1545Done: state.futures1545Done,
+        futures1545DoneDate: state.futures1545DoneDate, // 날짜 기반 리셋용
       }),
     }
   )

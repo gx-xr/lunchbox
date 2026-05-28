@@ -438,6 +438,15 @@ export async function runAutoTradingCycle(): Promise<void> {
  
   const now = hhmm();
   if (now < 900 || now > 1550) return;
+
+  // ─── 날짜 바뀌면 futures1530Done/1545Done 자동 리셋 ──────────
+  const today = new Date().toISOString().slice(0, 10);
+  if (store.futures1530Done && store.futures1530DoneDate !== today) {
+    store.setFutures1530Done(false);
+  }
+  if (store.futures1545Done && store.futures1545DoneDate !== today) {
+    store.setFutures1545Done(false);
+  }
  
   const activeEntries = store.getCurrentEntries().filter((e) => e.status === 'monitoring');
  
@@ -962,13 +971,15 @@ const BG_OPTIONS = {
   color: '#1a1a1a',
   linkingURI: 'lunchbox://home',
   parameters: {},
+  // 🔥 안드로이드 14(targetSdk 34) 이상 크래시 방지를 위한 핵심 옵션 추가
+  foregroundServiceType: 'dataSync' as const,
 };
  
 export async function startAutoTrading(): Promise<void> {
   useAutoTradingStore.getState().setRunning(true);
   log('자동매매 시작', 'success');
   try {
-    await BackgroundActions.start(tradingTask, BG_OPTIONS);
+    await BackgroundActions.start(tradingTask, BG_OPTIONS as any);
   } catch (e: any) {
     log('백그라운드 미지원 → 포그라운드 모드 실행', 'warn');
     const timer = setInterval(async () => {

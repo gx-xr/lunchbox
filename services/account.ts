@@ -7,6 +7,8 @@
  * ✅ t2111 병렬 호출로 종목명 풀네임 가져오기
  */
 import { AccountInfo, Position } from '../types/trading';
+import { getMarketFromCode } from '../constants/marketCodes';
+
  
 const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
  
@@ -127,7 +129,7 @@ export async function fetchAccountAndPositions(token: string): Promise<{
       CFOAQ50600InBlock1: {
         RecCnt: 1,
         OrdDt: ordDt,
-        BalEvalTp: '2',
+        BalEvalTp: '1',
         FutsPrcEvalTp: '1', // 당초가 : 매입단가 기준
         LqtQtyQryTp: '1',
       },
@@ -159,7 +161,7 @@ export async function fetchAccountAndPositions(token: string): Promise<{
             qty: Number(r.UnsttQty ?? 0),
             avgPrice: Number(r.FnoAvrPrc ?? 0),
             evalAmt: Number(r.EvalAmt ?? 0),
-            buyAmt: Number(r.FnoAvrPrc ?? 0) * Number(r.UnsttQty ?? 0),
+            buyAmt: Number(r.FnoAvrPrc ?? 0) * Number(r.UnsttQty ?? 0) * (getMarketFromCode(String(r.FnoIsuNo ?? '')) === 'KOSPI200' ? 250000 : 10000),
             evalPnl: Number(r.EvalPnl ?? 0),
             pnlRate: Number(r.PnlRat ?? 0),
             actprice: parsedActprice,

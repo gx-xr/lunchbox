@@ -1,6 +1,10 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { Text, TextInput } from 'react-native';
 
+// ✅ 폰트 스케일링 최대 1.2배 제한 (시스템 폰트 크기 때문에 UI 깨짐 방지)
+(Text as any).defaultProps = { ...(Text as any).defaultProps, maxFontSizeMultiplier: 1.2 };
+(TextInput as any).defaultProps = { ...(TextInput as any).defaultProps, maxFontSizeMultiplier: 1.2 };
 
 export default function RootLayout() {
   return (

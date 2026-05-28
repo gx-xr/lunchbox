@@ -147,11 +147,11 @@ function PositionCard({
               ['매매단가', formatAmount(position.avgPrice), undefined],
               ['현재가', formatAmount(position.currentPrice), '#009414'],
               ['잔고', String(position.qty), undefined],
-              ['잔여일', position.jandatecnt > 0 ? `${position.jandatecnt}일` : '-', '#ff0000'],
-              ['매입금액', formatAmount(position.buyAmt), undefined],
+              ['잔여일', position.jandatecnt > 0 ? `${position.jandatecnt}일` : '-', '#e53e3e'],
+              ['매매금액', formatAmount(position.buyAmt), undefined],
               ['평가금액', formatAmount(position.evalAmt), undefined],
-              ['평가손익', (isProfit ? '+' : '') + formatAmount(position.evalPnl), isProfit ? '#f04452' : '#3182f6'],
-              ['수익률', (isProfit ? '+' : '') + position.pnlRate.toFixed(2) + '%', isProfit ? '#f04452' : '#3182f6'],
+              ['평가손익', (isProfit ? '+ ' : '') + formatAmount(position.evalPnl), isProfit ? '#e53e3e' : '#3182f6'],
+              ['수익률', (isProfit ? '+ ' : '') + position.pnlRate.toFixed(2) + '%', isProfit ? '#e53e3e' : '#3182f6'],
             ] as [string, string, string | undefined][]).map(([label, value, color]) => (
               <View key={label} style={styles.detailItem}>
                 <Text style={styles.detailLabel}>{label}</Text>

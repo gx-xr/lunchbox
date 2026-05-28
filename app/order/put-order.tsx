@@ -1,10 +1,11 @@
 /**
  * app/order/put-order.tsx
  * 옵션 주문 화면 — futures.tsx 카드 레이아웃 스타일
- * ✅ 지정가 고정 (시장가 제거)
+ * ✅ 지정가 고정
  * ✅ market 타입 파싱 수정 (string | string[] → 명시적 타입)
  * ✅ t2111로 종목명 + 잔존일 API에서 직접 받아오기
- * ✅ 주석 추가 (코드단/UI단 구분)
+ * ✅ 풋매도 체결 시 AutoSetupSheet 자동 오픈
+ * ✅ 콜매도 체결 시 CallAutoSetupSheet 자동 오픈
  */
 import React, { useState, useEffect, useCallback } from 'react';
 import {
@@ -19,6 +20,7 @@ import { placeFuturesOrder, calcMaxQty, fetchFuturesOrders } from '../../service
 import { fetchAccountAndPositions } from '../../services/account';
 import { fetchFuturesHogaData } from '../../services/market';
 import AutoSetupSheet from '../../components/AutoSetupSheet';
+import CallAutoSetupSheet from '../../components/CallAutoSetupSheet'; // ✅ 콜매도 자동화 시트 추가
  
 const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
  
@@ -97,6 +99,7 @@ export default function PutOrderScreen() {
   const [loading, setLoading] = useState(false);
   const [confirmVisible, setConfirmVisible] = useState(false);
   const [autoSheetVisible, setAutoSheetVisible] = useState(false);
+  const [callAutoSheetVisible, setCallAutoSheetVisible] = useState(false); // ✅ 콜매도 자동화 시트
   const [ordNo, setOrdNo] = useState('');
  
   // ─── 호가 데이터 ─────────────────────────────────────────────
@@ -112,7 +115,6 @@ export default function PutOrderScreen() {
   const [spotIsUp, setSpotIsUp] = useState(true);
  
   // ─── t2111에서 받아오는 종목명 + 잔존일 ─────────────────────
-  // isuNm(홈에서 넘어온 값) 없으면 API에서 받아옴
   const [apiSymbolName, setApiSymbolName] = useState('');
   const [apiJandatecnt, setApiJandatecnt] = useState(0);
  
@@ -174,7 +176,6 @@ export default function PutOrderScreen() {
   }, [optionLabel, sideLabel]);
  
   // ─── 호가 + 종목명 + 잔존일 조회 (3초마다 갱신) ────────────
-  // t2111로 종목명(hname), 잔존일(bjandatecnt) 받아옴
   const loadHoga = useCallback(async () => {
     if (!token || !putCode) return;
     try {
@@ -189,11 +190,7 @@ export default function PutOrderScreen() {
         body: JSON.stringify({ t2111InBlock: { focode: putCode } }),
       });
       const nameData = await nameRes.json();
-      // const hname = String(nameData?.t2111OutBlock?.hname ?? '');
       console.log('[t2111 hname 확인]', nameData?.t2111OutBlock?.hname);
-      //const bjandatecnt = Number(nameData?.t2111OutBlock?.bjandatecnt ?? 0);
-      // if (hname) setApiSymbolName(hname);
-      //if (bjandatecnt > 0) setApiJandatecnt(bjandatecnt);
  
       // ─── 호가 조회 ──────────────────────────────────────────
       const data = await fetchFuturesHogaData(token, putCode);
@@ -249,7 +246,7 @@ export default function PutOrderScreen() {
   }
  
   // ─── 주문 실행 ───────────────────────────────────────────────
-  // 풋매도 체결 시 자동화 설정 시트 오픈
+  // ✅ 풋매도 → AutoSetupSheet, 콜매도 → CallAutoSetupSheet
   async function confirmOrder() {
     if (!token || !putCode) return;
     setConfirmVisible(false);
@@ -266,21 +263,26 @@ export default function PutOrderScreen() {
       if (result.success) {
         setOrdNo(result.ordNo ?? '');
  
-        // 풋매도 체결 시 → 자동화 설정 시트 오픈
-        if (isSell && !isCall) {
+        // ✅ 매도 체결 시 → 자동화 설정 시트 오픈 (풋/콜 분기)
+        if (isSell) {
           let checked = false;
-          for (let i = 0; i < 10; i++) {
+          for (let i = 0; i < 2; i++) {
             await new Promise(r => setTimeout(r, 1000));
             const orders = await fetchFuturesOrders(token, '1');
             const matched = orders.find(o => o.expcode === putCode && o.cheqty > 0);
             if (matched) { checked = true; break; }
           }
           if (checked) {
-            setAutoSheetVisible(true);
+            // ✅ 콜매도 → CallAutoSetupSheet, 풋매도 → AutoSetupSheet
+            if (isCall) {
+              setCallAutoSheetVisible(true);
+            } else {
+              setAutoSheetVisible(true);
+            }
           } else {
             Alert.alert(
               '⚠️ 미체결',
-              `주문번호: ${result.ordNo}\n아직 체결되지 않았습니다.\n체결 후 자동화를 설정해주세요.`,
+              `주문번호: ${result.ordNo}\n아직 체결되지 않았습니다.\n체결 후 보유 포지션에서 자동화를 설정해주세요.`,
               [{ text: '확인', onPress: () => router.back() }]
             );
           }
@@ -532,12 +534,24 @@ export default function PutOrderScreen() {
       </Modal>
  
       {/* ── 풋매도 자동화 설정 시트 ── */}
-      {/* 풋매도 체결 후 자동으로 열림 */}
       <AutoSetupSheet
         visible={autoSheetVisible}
         onClose={() => { setAutoSheetVisible(false); router.back(); }}
         putCode={putCode ?? ''}
         putName={`${marketName} 위클리 풋옵션 행사가 ${actPrice.toLocaleString()}`}
+        actprice={actPrice}
+        currentPrice={currentPrice}
+        market={market ?? 'KOSPI200'}
+        ordNo={ordNo}
+        weekKey={weekKey ?? ''}
+      />
+ 
+      {/* ── 콜매도 자동화 설정 시트 ── */}
+      <CallAutoSetupSheet
+        visible={callAutoSheetVisible}
+        onClose={() => { setCallAutoSheetVisible(false); router.back(); }}
+        callCode={putCode ?? ''}
+        callName={`${marketName} 위클리 콜옵션 행사가 ${actPrice.toLocaleString()}`}
         actprice={actPrice}
         currentPrice={currentPrice}
         market={market ?? 'KOSPI200'}

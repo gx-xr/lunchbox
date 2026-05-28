@@ -30,8 +30,7 @@
       "predictiveBackGestureEnabled": false,
       "permissions": [
         "FOREGROUND_SERVICE",
-        "WAKE_LOCK",
-        "FOREGROUND_SERVICE",
+        "FOREGROUND_SERVICE_DATA_SYNC",
         "WAKE_LOCK"
       ],
       "package": "com.anonymous.lunchbox"

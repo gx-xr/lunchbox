@@ -20,7 +20,10 @@ export interface AutoTradingEntry {
   closingPrice: number;
   hedgeQty: number;
   futuresCode: string;
-  status: 'monitoring' | 'closing' | 'closed' | 'hedged';
+  // 🔧 청산 라이프사이클 전용 (hedged 제거)
+  status: 'monitoring' | 'closing' | 'closed';
+  // 🔧 헤지 상태 별도 필드 (optional, 기본값 false 취급)
+  hedged?: boolean;
   currentPrice: number;
   registeredAt: string;
   acntNo: string;
@@ -39,7 +42,10 @@ export interface CallTradingEntry {
   closingPrice: number;
   hedgeQty: number;
   futuresCode: string;
-  status: 'monitoring' | 'closing' | 'closed' | 'hedged';
+  // 🔧 청산 라이프사이클 전용 (hedged 제거)
+  status: 'monitoring' | 'closing' | 'closed';
+  // 🔧 헤지 상태 별도 필드 (optional, 기본값 false 취급)
+  hedged?: boolean;
   currentPrice: number;
   registeredAt: string;
   acntNo: string;
@@ -78,10 +84,13 @@ interface AutoTradingState {
   callEntries: CallTradingEntry[];
   autoSellConfigs: AutoSellConfig[];
   logs: AutoTradingLog[];
-  futures1530Done: boolean;
-  futures1530DoneDate: string; // 날짜 기반 리셋용 (YYYY-MM-DD)
+  // 🔧 풋/콜 별도 플래그 — 사이클 간 간섭 방지
+  futures1530DonePut: boolean;
+  futures1530DonePutDate: string;
+  futures1530DoneCall: boolean;
+  futures1530DoneCallDate: string;
   futures1545Done: boolean;
-  futures1545DoneDate: string; // 날짜 기반 리셋용 (YYYY-MM-DD)
+  futures1545DoneDate: string;
  
   setRunning: (v: boolean) => void;
  
@@ -90,6 +99,7 @@ interface AutoTradingState {
   removeEntry: (putCode: string) => void;
   updateEntry: (putCode: string, patch: Partial<AutoTradingEntry>) => void;
   setEntryStatus: (putCode: string, status: AutoTradingEntry['status']) => void;
+  setEntryHedged: (putCode: string, hedged: boolean) => void; // 🔧 헤지 상태 별도 setter
   updateCurrentPrice: (putCode: string, price: number) => void;
   updateEntryBasis: (putCode: string, averageBasis: number) => void;
   getCurrentEntries: () => AutoTradingEntry[];
@@ -99,13 +109,16 @@ interface AutoTradingState {
   removeCallEntry: (callCode: string) => void;
   updateCallEntry: (callCode: string, patch: Partial<CallTradingEntry>) => void;
   setCallEntryStatus: (callCode: string, status: CallTradingEntry['status']) => void;
+  setCallEntryHedged: (callCode: string, hedged: boolean) => void; // 🔧 헤지 상태 별도 setter
   updateCallCurrentPrice: (callCode: string, price: number) => void;
   updateCallBasis: (callCode: string, averageBasis: number) => void;
   getCurrentCallEntries: () => CallTradingEntry[];
  
   addLog: (log: AutoTradingLog) => void;
   clearLogs: () => void;
-  setFutures1530Done: (v: boolean) => void;
+  // 🔧 풋/콜 분리
+  setFutures1530DonePut: (v: boolean) => void;
+  setFutures1530DoneCall: (v: boolean) => void;
   setFutures1545Done: (v: boolean) => void;
   resetDaily: () => void;
  
@@ -126,10 +139,13 @@ export const useAutoTradingStore = create<AutoTradingState>()(
       callEntries: [],
       autoSellConfigs: [],
       logs: [],
-      futures1530Done: false,
-      futures1530DoneDate: '', // 날짜 기반 리셋용 초기값
+      // 🔧 풋/콜 별도 플래그
+      futures1530DonePut: false,
+      futures1530DonePutDate: '',
+      futures1530DoneCall: false,
+      futures1530DoneCallDate: '',
       futures1545Done: false,
-      futures1545DoneDate: '', // 날짜 기반 리셋용 초기값
+      futures1545DoneDate: '',
  
       setRunning: (v) => set({ isRunning: v }),
  
@@ -150,6 +166,12 @@ export const useAutoTradingStore = create<AutoTradingState>()(
       setEntryStatus: (putCode, status) =>
         set((s) => ({
           entries: s.entries.map((e) => e.putCode === putCode ? { ...e, status } : e),
+        })),
+
+      // 🔧 헤지 상태 별도 setter — 청산 라이프사이클과 독립
+      setEntryHedged: (putCode, hedged) =>
+        set((s) => ({
+          entries: s.entries.map((e) => e.putCode === putCode ? { ...e, hedged } : e),
         })),
  
       updateCurrentPrice: (putCode, price) =>
@@ -190,7 +212,13 @@ export const useAutoTradingStore = create<AutoTradingState>()(
         set((s) => ({
           callEntries: s.callEntries.map((e) => e.callCode === callCode ? { ...e, status } : e),
         })),
- 
+
+      // 🔧 콜 헤지 상태 별도 setter
+      setCallEntryHedged: (callCode, hedged) =>
+        set((s) => ({
+          callEntries: s.callEntries.map((e) => e.callCode === callCode ? { ...e, hedged } : e),
+        })),
+         
       updateCallCurrentPrice: (callCode, price) =>
         set((s) => ({
           callEntries: s.callEntries.map((e) => e.callCode === callCode ? { ...e, currentPrice: price } : e),
@@ -216,9 +244,14 @@ export const useAutoTradingStore = create<AutoTradingState>()(
       clearLogs: () => set({ logs: [] }),
  
       // 날짜 기반 중복 방지: true 세팅 시 오늘 날짜(YYYY-MM-DD) 함께 저장
-      setFutures1530Done: (v) => set({
-        futures1530Done: v,
-        futures1530DoneDate: v ? new Date().toISOString().slice(0, 10) : '',
+      // 🔧 풋/콜 별도 setter
+      setFutures1530DonePut: (v) => set({
+        futures1530DonePut: v,
+        futures1530DonePutDate: v ? new Date().toISOString().slice(0, 10) : '',
+      }),
+      setFutures1530DoneCall: (v) => set({
+        futures1530DoneCall: v,
+        futures1530DoneCallDate: v ? new Date().toISOString().slice(0, 10) : '',
       }),
       setFutures1545Done: (v) => set({
         futures1545Done: v,
@@ -229,8 +262,11 @@ export const useAutoTradingStore = create<AutoTradingState>()(
       resetDaily: () => set((s) => {
         const acntNo = useAuthStore.getState().acntNo ?? '';
         return {
-          futures1530Done: false,
-          futures1530DoneDate: '',
+          // 🔧 풋/콜 별도 리셋
+          futures1530DonePut: false,
+          futures1530DonePutDate: '',
+          futures1530DoneCall: false,
+          futures1530DoneCallDate: '',
           futures1545Done: false,
           futures1545DoneDate: '',
           // 풋매도: 만기일 당일만 삭제, 나머지 유지
@@ -308,10 +344,13 @@ export const useAutoTradingStore = create<AutoTradingState>()(
         entries: state.entries,
         callEntries: state.callEntries,
         autoSellConfigs: state.autoSellConfigs,
-        futures1530Done: state.futures1530Done,
-        futures1530DoneDate: state.futures1530DoneDate, // 날짜 기반 리셋용
+        // 🔧 풋/콜 별도 persist
+        futures1530DonePut: state.futures1530DonePut,
+        futures1530DonePutDate: state.futures1530DonePutDate,
+        futures1530DoneCall: state.futures1530DoneCall,
+        futures1530DoneCallDate: state.futures1530DoneCallDate,
         futures1545Done: state.futures1545Done,
-        futures1545DoneDate: state.futures1545DoneDate, // 날짜 기반 리셋용
+        futures1545DoneDate: state.futures1545DoneDate,
       }),
     }
   )

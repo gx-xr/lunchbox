@@ -17,20 +17,29 @@ import { placeFuturesOrder, fetchFuturesOrders } from './order';
 import { fetchFuturesHogaData } from './market';
 import { useAuthStore } from '../store/authStore';
 import { AiBot } from './aiBot';
+// 🧪 테스트 모드 플래그 (시간대 / 잔여일 분리)
+import { TEST_BYPASS_TIME, TEST_BYPASS_EXPIRY } from '../constants/testMode';
  
 const BASE_URL = 'https://openapi.ls-sec.co.kr:8080';
  
 // ════════════════════════════════════════
 // ── 전역 변수 ───────────────────────────
 // ════════════════════════════════════════
-// 15:20~15:29 구간 30초 체크용 타임스탬프
-let lastMonitorCheckMs = 0;
+// 🔧 풋/콜 사이클 별도 모니터링 타임스탬프 (사이클 간 간섭 방지)
+let lastPutMonitorCheckMs = 0;
+let lastCallMonitorCheckMs = 0;
 // 베이시스 수집용 버퍼 (putCode별로 최대 10개)
 let basisBuffer: Record<string, number[]> = {};
 // 베이시스 마지막 수집 타임스탬프 (30초 주기)
 let lastBasisCollectMs = 0;
 // 콜매도 베이시스 별도 타임스탬프 (풋매도와 분리)
 let lastCallBasisCollectMs = 0;
+
+// 🔧 모니터링 로그 throttle (10초 사이클이지만 로그는 N분마다)
+//    값 변경으로 출력 빈도 조절 가능
+const MONITOR_LOG_INTERVAL_MS = 60_000; // 1분 (3분=180_000, 5분=300_000)
+let lastPutMonitorLogMs = 0;
+let lastCallMonitorLogMs = 0;
  
 // ════════════════════════════════════════
 // ── 유틸 함수 ───────────────────────────
@@ -245,7 +254,8 @@ async function buyFuturesHedge(
     });
     if (result.success) {
       log(`[헤지완료] ${entry.futuresCode} ${entry.hedgeQty}계약 @ ${orderPrice} 주문번호: ${result.ordNo}`, 'success');
-      useAutoTradingStore.getState().setEntryStatus(entry.putCode, 'hedged');
+      // 🔧 status 덮어쓰기 대신 hedged 필드만 갱신 (청산 라이프사이클과 독립)
+      useAutoTradingStore.getState().setEntryHedged(entry.putCode, true);
     } else {
       log(`[헤지실패] ${entry.futuresCode}: ${result.message}`, 'error');
     }
@@ -437,12 +447,17 @@ export async function runAutoTradingCycle(): Promise<void> {
   if (!store.isRunning || !token) return;
  
   const now = hhmm();
-  if (now < 900 || now > 1550) return;
+  // 🧪 TEST_MODE: 시간대 무시
+  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return;
 
-  // ─── 날짜 바뀌면 futures1530Done/1545Done 자동 리셋 ──────────
+  // ─── 날짜 바뀌면 자동 리셋 ──────────────────────────────────
+  // 🔧 풋/콜 분리, 각각 별도 체크
   const today = new Date().toISOString().slice(0, 10);
-  if (store.futures1530Done && store.futures1530DoneDate !== today) {
-    store.setFutures1530Done(false);
+  if (store.futures1530DonePut && store.futures1530DonePutDate !== today) {
+    store.setFutures1530DonePut(false);
+  }
+  if (store.futures1530DoneCall && store.futures1530DoneCallDate !== today) {
+    store.setFutures1530DoneCall(false);
   }
   if (store.futures1545Done && store.futures1545DoneDate !== today) {
     store.setFutures1545Done(false);
@@ -450,7 +465,9 @@ export async function runAutoTradingCycle(): Promise<void> {
  
   const activeEntries = store.getCurrentEntries().filter((e) => e.status === 'monitoring');
  
-  if (activeEntries.length > 0) {
+  // 🔧 모니터링 로그 throttle — N분에 한 번만 출력
+  if (activeEntries.length > 0 && Date.now() - lastPutMonitorLogMs >= MONITOR_LOG_INTERVAL_MS) {
+    lastPutMonitorLogMs = Date.now();
     log(
       `[풋매도 선물 자동매수 모니터링] ${activeEntries.map(e =>
         `${e.putCode}(행사가${e.actprice}${e.emaEnabled ? '/AI' : ''})`
@@ -488,7 +505,8 @@ export async function runAutoTradingCycle(): Promise<void> {
  
   // ② 15:10~15:20 베이시스 실시간 수집 (30초마다)
   // t2111(선물가) + t1511(현물가) 직접 조회
-  if (now >= 1510 && now < 1520) {
+  // 🧪 TEST_MODE: 시간대 무시
+  if (TEST_BYPASS_TIME || (now >= 1515 && now < 1520)) {
     const nowMs = Date.now();
     if (nowMs - lastBasisCollectMs >= 30_000) {
       lastBasisCollectMs = nowMs;
@@ -497,7 +515,8 @@ export async function runAutoTradingCycle(): Promise<void> {
       );
       for (const entry of hedgeEntries) {
         // 만기일 체크: jandatecnt < 1 인 종목만 베이시스 수집
-        if (entry.jandatecnt > 1) {
+        // 🧪 TEST_MODE: 잔여일 무시
+        if (!TEST_BYPASS_EXPIRY && entry.jandatecnt > 1) {
           log(`[베이시스] ${entry.putCode} 만기일 아님(잔여${entry.jandatecnt}일) → 스킵`, 'info');
           continue;
         }
@@ -507,16 +526,19 @@ export async function runAutoTradingCycle(): Promise<void> {
   }
  
   // ③ 15:20~15:29 평균Basis 모니터링 Basis : (선물가 - 현물가)
-  if (now >= 1520 && now < 1530 && !store.futures1530Done) {
+  // 🔧 풋 전용 플래그/타임스탬프 사용
+  if (TEST_BYPASS_TIME || (now >= 1520 && now < 1530 && !store.futures1530DonePut)) {
     const nowMs = Date.now();
-    if (nowMs - lastMonitorCheckMs >= 30_000) {
-      lastMonitorCheckMs = nowMs;
+    if (nowMs - lastPutMonitorCheckMs >= 30_000) {
+      lastPutMonitorCheckMs = nowMs;
+      // 🔧 status 무관 — 아직 헤지 안 한 entry만 처리
       const hedgeEntries = store.getCurrentEntries().filter(
-        (e) => (e.status === 'monitoring' || e.status === 'closed') && e.hedgeQty > 0
+        (e) => !e.hedged && e.hedgeQty > 0
       );
       for (const entry of hedgeEntries) {
         // 만기일 체크
-        if (entry.jandatecnt > 1) continue;
+        // 🧪 TEST_MODE: 잔여일 무시
+        if (!TEST_BYPASS_EXPIRY && entry.jandatecnt > 1) continue;
  
         // 버퍼에서 평균 베이시스 계산
         const averageBasis = calcAverageBasis(entry.putCode);
@@ -542,15 +564,17 @@ export async function runAutoTradingCycle(): Promise<void> {
   }
  
   // ④ 15:30~15:35 조건 확정 → 선물 자동매수 주문
-  if (now >= 1530 && now <= 1535 && !store.futures1530Done) {
-    const hedgeEntries = store.getCurrentEntries().filter(
-      (e) => e.status === 'monitoring' || e.status === 'closed'
-    );
+  // 🧪 TEST_MODE: 시간대/완료플래그 무시
+  // 🔧 풋 전용 플래그 사용
+  if (TEST_BYPASS_TIME || (now >= 1530 && now <= 1535 && !store.futures1530DonePut)) {
+    // 🔧 status 무관 — 아직 헤지 안 한 entry만 처리 (청산 상태와 독립)
+    const hedgeEntries = store.getCurrentEntries().filter((e) => !e.hedged);
     for (const entry of hedgeEntries) {
       if (entry.hedgeQty <= 0) { log(`[선물매수] hedgeQty 0 → 비활성화`, 'info'); continue; }
  
       // 만기일 체크: jandatecnt < 1 인 종목만 선물 매수
-      if (entry.jandatecnt > 1) {
+      // 🧪 TEST_MODE: 잔여일 무시
+      if (!TEST_BYPASS_EXPIRY && entry.jandatecnt > 1) {
         log(`[선물매수] ${entry.putCode} 만기일 아님(잔여${entry.jandatecnt}일) → 스킵`, 'warn');
         continue;
       }
@@ -590,7 +614,8 @@ export async function runAutoTradingCycle(): Promise<void> {
         log(`[선물매수 불필요] 평균현물가 ${avgSpotPrice} ≥ 행사가 ${entry.actprice}`, 'success');
       }
     }
-    store.setFutures1530Done(true);
+    // 🔧 풋 완료 플래그
+    store.setFutures1530DonePut(true);
   }
  
   // ⑤ 15:45 종료
@@ -624,7 +649,8 @@ export async function runAutoSellCycle(): Promise<void> {
   if (!token) return;
  
   const now = hhmm();
-  if (now < 900 || now > 1550) return;
+  // 🧪 TEST_MODE: 시간대 무시
+  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return;
  
   const configs = store.getAutoSellConfigs();
   if (configs.length === 0) return;
@@ -633,7 +659,8 @@ export async function runAutoSellCycle(): Promise<void> {
     if (config.sold) continue;
  
     const sellTimeNum = Number(config.sellTime.replace(':', ''));
-    if (now < sellTimeNum || now >= 1530) continue;
+    // 🧪 TEST_MODE: 시간대 무시
+    if (!TEST_BYPASS_TIME && (now < sellTimeNum || now >= 1530)) continue;
     if (config.checked) continue;
  
     store.setAutoSellChecked(config.nextWeeklyKey, config.acntNo);
@@ -700,7 +727,8 @@ export async function runEmaAutoSellCycle(): Promise<void> {
   if (!store.isRunning || !token) return;
  
   const now = hhmm();
-  if (now < 900 || now > 1530) return;
+  // 🧪 TEST_MODE: 시간대 무시
+  if (!TEST_BYPASS_TIME && (now < 900 || now > 1530)) return;
  
   const emaEntries = store.getCurrentEntries().filter(
     (e) => e.status === 'monitoring' && e.emaEnabled === true
@@ -744,7 +772,7 @@ export async function runEmaAutoSellCycle(): Promise<void> {
         if (result.success) {
           log(`[EMA매도 완료] ${entry.putCode} @ ${orderPrice} (주문번호: ${result.ordNo})`, 'success');
           store.updateEntry(entry.putCode, { emaEnabled: false });
-          store.setFutures1530Done(false);
+          store.setFutures1530DonePut(true); //  (🔧 풋 완료 플래그)
         } else {
           log(`[EMA매도 실패] ${entry.putCode}: ${result.message}`, 'error');
         }
@@ -766,15 +794,19 @@ export async function runCallTradingCycle(): Promise<void> {
   if (!store.isRunning || !token) return;
  
   const now = hhmm();
-  if (now < 900 || now > 1550) return;
+  // 🧪 TEST_MODE: 시간대 무시
+  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return;
  
   const callEntries = store.getCurrentCallEntries().filter((e) => e.status === 'monitoring');
-  if (callEntries.length === 0) return;
  
-  log(
-    `[콜매도 선물 자동매도 모니터링] ${callEntries.map(e => `${e.callCode}(행사가${e.actprice})`).join(', ')}`,
-    'info'
-  );
+  // 🔧 early return 제거 + 로그 throttle (N분에 한 번)
+  if (callEntries.length > 0 && Date.now() - lastCallMonitorLogMs >= MONITOR_LOG_INTERVAL_MS) {
+    lastCallMonitorLogMs = Date.now();
+    log(
+      `[콜매도 선물 자동매도 모니터링] ${callEntries.map(e => `${e.callCode}(행사가${e.actprice})`).join(', ')}`,
+      'info'
+    );
+  }
  
   // ─── 콜매도 closing 상태 체결 확인 ──────────────────────────
   const closingCallEntries = store.getCurrentCallEntries().filter(e => e.status === 'closing');
@@ -822,14 +854,19 @@ export async function runCallTradingCycle(): Promise<void> {
  
   // ② 15:10~15:20 베이시스 수집 (30초마다)
   // 풋매도와 동일한 basisBuffer 사용 (callCode 키로 저장)
-  if (now >= 1510 && now < 1520) {
+  // 🧪 TEST_MODE: 시간대 무시
+  if (TEST_BYPASS_TIME || (now >= 1515 && now < 1520)) {
     const nowMs = Date.now();
     if (nowMs - lastCallBasisCollectMs >= 30_000) {
       lastCallBasisCollectMs = nowMs;
-      const hedgeCallEntries = callEntries.filter(e => e.hedgeQty > 0);
+      // 🔧 callEntries(monitoring) 대신 전체 콜 entries 대상으로 — 청산 상태와 독립
+      const hedgeCallEntries = store.getCurrentCallEntries().filter(
+        e => !e.hedged && e.hedgeQty > 0
+      );
       for (const entry of hedgeCallEntries) {
         // 만기일 체크: jandatecnt < 1 인 종목만 베이시스 수집
-        if (entry.jandatecnt > 1) {
+        // 🧪 TEST_MODE: 잔여일 무시
+        if (!TEST_BYPASS_EXPIRY && entry.jandatecnt > 1) {
           log(`[콜베이시스] ${entry.callCode} 만기일 아님(잔여${entry.jandatecnt}일) → 스킵`, 'info');
           continue;
         }
@@ -853,14 +890,18 @@ export async function runCallTradingCycle(): Promise<void> {
   }
  
   // ③ 15:20~15:29 평균Basis 모니터링 Basis : (선물가 - 현물가)
-  if (now >= 1520 && now < 1530 && !store.futures1530Done) {
+  // 🧪 TEST_MODE: 시간대/완료플래그 무시
+  // 🔧 콜 전용 플래그/타임스탬프 사용 + 누락됐던 타임스탬프 저장 추가
+  if (TEST_BYPASS_TIME || (now >= 1520 && now < 1530 && !store.futures1530DoneCall)) {
     const nowMs = Date.now();
-    if (nowMs - lastMonitorCheckMs >= 30_000) {
-      const hedgeCallEntries = callEntries.filter(
-        e => (e.status === 'monitoring' || e.status === 'closed') && e.hedgeQty > 0
+    if (nowMs - lastCallMonitorCheckMs >= 30_000) {
+      lastCallMonitorCheckMs = nowMs; // 🔧 원래 코드에 빠져있던 타임스탬프 저장
+      const hedgeCallEntries = store.getCurrentCallEntries().filter(
+        e => !e.hedged && e.hedgeQty > 0
       );
       for (const entry of hedgeCallEntries) {
-        if (entry.jandatecnt > 1) continue;
+        // 🧪 TEST_MODE: 잔여일 무시
+        if (!TEST_BYPASS_EXPIRY && entry.jandatecnt > 1) continue;
         const averageBasis = calcAverageBasis(entry.callCode);
         if (averageBasis === 0) { log(`[콜선물매도] 베이시스 없음 → 스킵`, 'warn'); continue; }
         const res = await fetch(`${BASE_URL}/futureoption/market-data`, {
@@ -883,15 +924,17 @@ export async function runCallTradingCycle(): Promise<void> {
  
   // ④ 15:30~15:35 선물 자동매도 주문
   // 조건: 평균현물가 > 행사가 → 선물 매도
-  if (now >= 1530 && now <= 1535 && !store.futures1530Done) {
-    const hedgeCallEntries = callEntries.filter(
-      e => e.status === 'monitoring' || e.status === 'closed'
-    );
+  // 🧪 TEST_MODE: 시간대/완료플래그 무시
+  // 🔧 콜 전용 플래그 사용
+  if (TEST_BYPASS_TIME || (now >= 1530 && now <= 1535 && !store.futures1530DoneCall)) {
+    // 🔧 callEntries(monitoring) 대신 전체 콜 entries 대상으로 — 청산 상태와 독립
+    const hedgeCallEntries = store.getCurrentCallEntries().filter(e => !e.hedged);
     for (const entry of hedgeCallEntries) {
       if (entry.hedgeQty <= 0) { log(`[콜선물매도] hedgeQty 0 → 비활성화`, 'info'); continue; }
  
       // 만기일 체크: jandatecnt < 1 인 종목만 선물 매도
-      if (entry.jandatecnt > 1) {
+      // 🧪 TEST_MODE: 잔여일 무시
+      if (!TEST_BYPASS_EXPIRY && entry.jandatecnt > 1) {
         log(`[콜선물매도] ${entry.callCode} 만기일 아님(잔여${entry.jandatecnt}일) → 스킵`, 'warn');
         continue;
       }
@@ -936,7 +979,8 @@ export async function runCallTradingCycle(): Promise<void> {
         });
         if (result.success) {
           log(`[콜선물매도 완료] ${entry.futuresCode} ${entry.hedgeQty}계약 @ ${bidho1} 주문번호: ${result.ordNo}`, 'success');
-          store.setCallEntryStatus(entry.callCode, 'hedged');
+          // 🔧 status 덮어쓰기 대신 hedged 필드만 갱신
+          store.setCallEntryHedged(entry.callCode, true);
         } else {
           log(`[콜선물매도 실패] ${result.message}`, 'error');
         }
@@ -944,6 +988,8 @@ export async function runCallTradingCycle(): Promise<void> {
         log(`[콜선물매도 불필요] 평균현물가 ${avgSpotPrice} ≤ 행사가 ${entry.actprice}`, 'success');
       }
     }
+    // 🔧 콜 완료 플래그 (풋매도와 대칭)
+    store.setFutures1530DoneCall(true);
   }
 }
  

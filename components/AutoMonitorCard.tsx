@@ -11,26 +11,22 @@ import { startAutoTrading, stopAutoTrading } from '../services/autoTrading';
 import AutoSetupSheet from './AutoSetupSheet';
 import CallAutoSetupSheet from './CallAutoSetupSheet';
  
-function calcDaysLeft(): number {
-  const now = new Date();
-  const day = now.getDay();
-  const targets = [1, 4];
-  let minDays = 7;
-  for (const target of targets) {
-    let diff = target - day;
-    if (diff < 0) diff += 7;
-    if (diff < minDays) minDays = diff;
-  }
-  return minDays;
-}
+// ════════════════════════════════════════
+// ── 코드단: calcDaysLeft 제거됨 ─────────
+// ════════════════════════════════════════
+// 기존 calcDaysLeft()는 종목과 무관하게 요일만 계산하는 버그가 있어 제거.
+// 잔여일은 entry.jandatecnt (LS API 값) 를 그대로 사용한다.
+// LS 컨벤션: 만기당일=1, 그 다음날=2, ...
  
-// ─── 풋매도 상태 배지 ─────────────────────────────────────────
+// ════════════════════════════════════════
+// ── UI단: 풋매도 청산 상태 배지 ────────
+// ════════════════════════════════════════
+// 🔧 'hedged' 제거 — 헤지 상태는 별도 HedgeBadge로 분리
 function StatusBadge({ status }: { status: AutoTradingEntry['status'] }) {
   const config = {
-    monitoring: { label: '● 모니터링 중', color: '#3182f6', bg: '#eff6ff' },
-    closed:     { label: '✓ 청산완료',    color: '#16a34a', bg: '#f0fdf4' },
-    closing:     { label: '✓ 청산접수완료',    color: '#16a34a', bg: '#f0fdf4' },
-    hedged:     { label: '⚡ 헤지완료',   color: '#b45309', bg: '#fffbeb' },
+    monitoring: { label: '● 모니터링 중',  color: '#3182f6', bg: '#eff6ff' },
+    closing:    { label: '✓ 청산접수완료', color: '#16a34a', bg: '#f0fdf4' },
+    closed:     { label: '✓ 청산완료',     color: '#16a34a', bg: '#f0fdf4' },
   }[status];
   return (
     <View style={[bs.badge, { backgroundColor: config.bg }]}>
@@ -38,18 +34,38 @@ function StatusBadge({ status }: { status: AutoTradingEntry['status'] }) {
     </View>
   );
 }
+
+// ─── 헤지 완료 배지 (청산과 독립) ────────────────────────────
+function HedgeBadge() {
+  return (
+    <View style={[bs.badge, { backgroundColor: '#fffbeb' }]}>
+      <Text style={[bs.text, { color: '#b45309' }]}>⚡선물매수완료</Text>
+    </View>
+  );
+}
  
-// ─── 콜매도 상태 배지 ✅ ──────────────────────────────────────
+// ════════════════════════════════════════
+// ── UI단: 콜매도 청산 상태 배지 ────────
+// ════════════════════════════════════════
+// 🔧 'hedged' 제거 — 헤지 상태는 별도 CallHedgeBadge로 분리
 function CallStatusBadge({ status }: { status: CallTradingEntry['status'] }) {
   const config = {
-    monitoring: { label: '● 모니터링 중', color: '#f04452', bg: '#fff1f0' },
-    closed:     { label: '✓ 청산완료',    color: '#16a34a', bg: '#f0fdf4' },
-    closing:     { label: '✓ 청산접수완료',    color: '#16a34a', bg: '#f0fdf4' },
-    hedged:     { label: '⚡ 매도완료',   color: '#b45309', bg: '#fffbeb' },
+    monitoring: { label: '● 모니터링 중',  color: '#f04452', bg: '#fff1f0' },
+    closing:    { label: '✓ 청산접수완료', color: '#16a34a', bg: '#f0fdf4' },
+    closed:     { label: '✓ 청산완료',     color: '#16a34a', bg: '#f0fdf4' },
   }[status];
   return (
     <View style={[bs.badge, { backgroundColor: config.bg }]}>
       <Text style={[bs.text, { color: config.color }]}>{config.label}</Text>
+    </View>
+  );
+}
+
+// ─── 콜 헤지 완료 배지 (청산과 독립) ──────────────────────────
+function CallHedgeBadge() {
+  return (
+    <View style={[bs.badge, { backgroundColor: '#fffbeb' }]}>
+      <Text style={[bs.text, { color: '#b45309' }]}>⚡선물매도완료</Text>
     </View>
   );
 }
@@ -65,7 +81,8 @@ function EntryRow({ entry, onEdit, onDelete }: {
   onEdit: (entry: AutoTradingEntry) => void;
   onDelete: (putCode: string) => void;
 }) {
-  const daysLeft = calcDaysLeft();
+  // 잔여일은 LS API의 jandatecnt 값을 그대로 사용 (만기당일=1)
+  const daysLeft = entry.jandatecnt;
   const distToClose = Math.max(0, entry.currentPrice - entry.closingPrice);
  
   return (
@@ -78,6 +95,8 @@ function EntryRow({ entry, onEdit, onDelete }: {
         </View>
         <View style={es.right}>
           <StatusBadge status={entry.status} />
+          {/* 🔧 헤지 완료 시 별도 배지 표시 (청산 상태와 독립) */}
+          {entry.hedged && <HedgeBadge />}
           {/* ✅ 풋매도 배지 */}
           <View style={es.putBadge}>
             <Text style={es.putBadgeText}>📉 풋매도</Text>
@@ -96,8 +115,9 @@ function EntryRow({ entry, onEdit, onDelete }: {
       <View style={es.infoRow}>
         <View style={es.infoItem}>
           <Text style={es.infoLabel}>잔여일</Text>
-          <Text style={[es.infoValue, { color: daysLeft === 0 ? '#ef4444' : daysLeft <= 1 ? '#f59e0b' : '#1a1a1a' }]}>
-            {daysLeft === 0 ? '오늘 만기' : `${daysLeft}일`}
+          {/* LS 컨벤션: jandatecnt=1 = 만기당일 → '오늘 만기' 표기 */}
+          <Text style={[es.infoValue, { color: daysLeft === 1 ? '#ef4444' : daysLeft <= 2 ? '#f59e0b' : '#1a1a1a' }]}>
+            {daysLeft === 1 ? '오늘 만기' : `${daysLeft}일`}
           </Text>
         </View>
         <View style={es.infoItem}>
@@ -144,7 +164,8 @@ function CallEntryRow({ entry, onEdit, onDelete }: {
   onEdit: (entry: CallTradingEntry) => void;
   onDelete: (callCode: string) => void;
 }) {
-  const daysLeft = calcDaysLeft();
+  // 잔여일은 LS API의 jandatecnt 값을 그대로 사용 (만기당일=1)
+  const daysLeft = entry.jandatecnt;
   const distToClose = Math.max(0, entry.currentPrice - entry.closingPrice);
  
   return (
@@ -157,6 +178,8 @@ function CallEntryRow({ entry, onEdit, onDelete }: {
         </View>
         <View style={es.right}>
           <CallStatusBadge status={entry.status} />
+          {/* 🔧 헤지 완료 시 별도 배지 표시 (청산 상태와 독립) */}
+          {entry.hedged && <CallHedgeBadge />}
           {/* 콜매도 배지 */}
           <View style={ces.callBadge}>
             <Text style={ces.callBadgeText}>📈 콜매도</Text>
@@ -170,8 +193,9 @@ function CallEntryRow({ entry, onEdit, onDelete }: {
       <View style={es.infoRow}>
         <View style={es.infoItem}>
           <Text style={es.infoLabel}>잔여일</Text>
-          <Text style={[es.infoValue, { color: daysLeft === 0 ? '#ef4444' : daysLeft <= 1 ? '#f59e0b' : '#1a1a1a' }]}>
-            {daysLeft === 0 ? '오늘 만기' : `${daysLeft}일`}
+          {/* LS 컨벤션: jandatecnt=1 = 만기당일 → '오늘 만기' 표기 */}
+          <Text style={[es.infoValue, { color: daysLeft === 1 ? '#ef4444' : daysLeft <= 2 ? '#f59e0b' : '#1a1a1a' }]}>
+            {daysLeft === 1 ? '오늘 만기' : `${daysLeft}일`}
           </Text>
         </View>
         <View style={es.infoItem}>

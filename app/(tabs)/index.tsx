@@ -18,6 +18,8 @@ import {
   isCallCode,
   isPutCode,
 } from '../../constants/marketCodes';
+// 🧪 테스트 모드 플래그 — 현재 활성 모드 표시용
+import { TEST_MODE, TEST_BYPASS_TIME, TEST_BYPASS_EXPIRY } from '../../constants/testMode';
  
 // ════════════════════════════════════════
 // ── 상수 ────────────────────────────────
@@ -147,7 +149,8 @@ function PositionCard({
               ['매매단가', formatAmount(position.avgPrice), undefined],
               ['현재가', formatAmount(position.currentPrice), '#009414'],
               ['잔고', String(position.qty), undefined],
-              ['잔여일', position.jandatecnt > 0 ? `${position.jandatecnt}일` : '-', '#e53e3e'],
+              // LS 컨벤션: jandatecnt=1 = 만기당일 → '오늘 만기' 로 표기
+              ['잔여일', position.jandatecnt === 1 ? '오늘 만기' : position.jandatecnt > 0 ? `${position.jandatecnt}일` : '-', '#e53e3e'],
               ['매매금액', formatAmount(position.buyAmt), undefined],
               ['평가금액', formatAmount(position.evalAmt), undefined],
               ['평가손익', (isProfit ? '+ ' : '') + formatAmount(position.evalPnl), isProfit ? '#e53e3e' : '#3182f6'],
@@ -217,7 +220,12 @@ function IndexCard({ index }: { index: IndexPrice }) {
 // ════════════════════════════════════════
 export default function HomeScreen() {
   const router = useRouter();
-  const { token, logout, setAcntNo } = useAuthStore();
+  const { token, setAcntNo } = useAuthStore();
+  // 🆕 활성 계정 정보 (별명 표시용)
+  // selector로 쓰면 accounts/activeAccountId 변경 시에만 리렌더
+  const activeAccount = useAuthStore(s => 
+    s.accounts.find(a => a.id === s.activeAccountId) ?? null
+  );
  
   // ─── State 선언 ──────────────────────────────────────────
   const [account, setAccount] = useState<AccountInfo | null>(null);
@@ -335,13 +343,28 @@ export default function HomeScreen() {
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
         showsVerticalScrollIndicator={false}
       >
-        {/* ── 헤더 ── */}
-        <View style={styles.header}>
-          <Text style={styles.appTitle}>🌱이삭줍기🌱</Text>
-          <TouchableOpacity onPress={async () => { await logout(); router.replace('/login'); }}>
-            <Text style={styles.logoutBtn}>로그아웃</Text>
-          </TouchableOpacity>
-        </View>
+        {/* ════════════════════════════════════════ */}
+        {/* ── UI단: 🧪 테스트 모드 경고 배너 ──── */}
+        {/* ════════════════════════════════════════ */}
+        {/* 어떤 모드가 켜져있는지 명시 → 깜빡 위험 줄임 */}
+        {TEST_MODE && (
+          <View style={styles.testBanner}>
+            <Text style={styles.testBannerText}>
+              🧪 TEST MODE 활성
+              {TEST_BYPASS_TIME && ' · 시간우회'}
+              {TEST_BYPASS_EXPIRY && ' · 잔여일우회'}
+              {' — 실거래 전 OFF!'}
+            </Text>
+          </View>
+        )}
+
+          {/* ── 헤더 ── */}
+          <View style={styles.header}>
+            <Text style={styles.appTitle}>🌱이삭줍기🌱</Text>
+            {activeAccount && (
+            <Text style={styles.activeAccount}>{activeAccount.nickname}</Text>
+            )}
+          </View>
  
         {/* ── 계좌 카드 ── */}
         <View style={styles.accountCard}>
@@ -441,7 +464,7 @@ const styles = StyleSheet.create({
   loadingContainer: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#f5f6f8' },
   header: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 },
   appTitle: { fontSize: 24, fontWeight: '800', color: '#1a1a1a' },
-  logoutBtn: { fontSize: 13, color: '#aaa' },
+  activeAccount: { color: '#888', fontSize: 14, fontWeight: '500', },
   accountCard: { backgroundColor: '#fff', borderRadius: 20, padding: 24, marginBottom: 16, shadowColor: '#000', shadowOpacity: 0.05, shadowRadius: 12, shadowOffset: { width: 0, height: 2 }, elevation: 3 },
   accountHeader: { flexDirection: 'row', alignItems: 'center', marginBottom: 12, gap: 8 },
   accountLabel: { fontSize: 13, color: '#888', fontWeight: '600' },
@@ -489,4 +512,20 @@ const styles = StyleSheet.create({
   autoOrderGrid: { flexDirection: 'row', flexWrap: 'wrap', gap: 10 },
   autoOrderBtn: { width: '47.5%', backgroundColor: '#fff', borderRadius: 16, padding: 20, alignItems: 'center', justifyContent: 'center', shadowColor: '#000', shadowOpacity: 0.04, shadowRadius: 8, shadowOffset: { width: 0, height: 2 }, elevation: 2, minHeight: 90 },
   autoOrderText: { fontSize: 14, fontWeight: '700', color: '#1a1a1a', textAlign: 'center', lineHeight: 22 },
+  // ── 🧪 테스트 모드 배너 스타일 ────────────
+  testBanner: {
+    backgroundColor: '#fef3c7',
+    borderWidth: 1,
+    borderColor: '#f59e0b',
+    borderRadius: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    marginBottom: 12,
+    alignItems: 'center',
+  },
+  testBannerText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#92400e',
+  },
 });

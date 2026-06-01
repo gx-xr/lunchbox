@@ -253,22 +253,45 @@ export default function HomeScreen() {
  
   // ─── 데이터 로드 ─────────────────────────────────────────
   const loadData = useCallback(async () => {
-    if (!token) return;
+    if (!token) {
+      console.log('[홈 loadData] token 없음 - skip');
+      return;
+    }
+    //console.log('[홈 loadData] 시작');
+
+    // 🔧 각 API 독립적으로 try-catch — 하나 실패해도 나머지는 정상 동작
+    
+    // ① 계좌 + 포지션
     try {
-      const [acctResult] = await Promise.all([
-        fetchAccountAndPositions(token),
-        fetchNearFutureCode(token),
-      ]);
+      const acctResult = await fetchAccountAndPositions(token);
       if (acctResult) {
         setAccount(acctResult.account);
         setPositions(acctResult.positions);
         setAcntNo(acctResult.account.acntNo);
+        console.log('[홈 loadData] 계좌+포지션 OK, 포지션:', acctResult.positions.length);
+      } else {
+        console.log('[홈 loadData] 계좌+포지션 null');
       }
+    } catch (e) {
+      console.log('[홈 loadData] 계좌+포지션 에러:', e);
+    }
+
+    // ② 선물 코드 (결과 안 씀 — 캐싱용?)
+    try {
+      await fetchNearFutureCode(token);
+      //console.log('[홈 loadData] 선물 코드 OK');
+    } catch (e) {
+      console.log('[홈 loadData] 선물 코드 에러:', e);
+    }
+
+    // ③ 지수
+    try {
       const indexResult = await fetchIndexPrices(token);
       setKospi200(indexResult.kospi200);
       setKosdaq150(indexResult.kosdaq150);
+      //console.log('[홈 loadData] 지수 OK');
     } catch (e) {
-      console.log('홈 데이터 로드 에러:', e);
+      console.log('[홈 loadData] 지수 에러:', e);
     }
   }, [token]);
  

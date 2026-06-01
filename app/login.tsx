@@ -108,6 +108,20 @@ export default function LoginScreen() {
     setView('select');
   }
  
+  // ════════════════════════════════════════
+  // ── 🆕 로그인 후 네비게이션 헬퍼 ─────────
+  // ════════════════════════════════════════
+  // addNew 모드(설정 → +새 계정 추가)에서 왔으면 router.back()
+  //   → 스택에 /(tabs)/ 중복 생성 방지 → 홈 화면 중복 mount 방지
+  // 그 외 (첫 로그인, 자동로그인, 계좌 선택 등)는 router.replace
+  function navigateAfterLogin() {
+    if (params.addNew === '1' && router.canGoBack()) {
+      router.back(); // 설정 탭으로 돌아감 (스택 정리)
+    } else {
+      router.replace('/(tabs)/');
+    }
+  }
+
   async function handleLogin() {
     // ════════════════════════════════════════
     // ── 입력 검증 ───────────────────────────
@@ -126,69 +140,69 @@ export default function LoginScreen() {
       }
     }
 
-  try {
-    setLoading(true);
-    
-    // ════════════════════════════════════════
-    // ── 토큰 발급 ───────────────────────────
-    // ════════════════════════════════════════
-    const token = await fetchToken({ appKey, appSecret });
+    try {
+      setLoading(true);
+      
+      // ════════════════════════════════════════
+      // ── 토큰 발급 ───────────────────────────
+      // ════════════════════════════════════════
+      const token = await fetchToken({ appKey, appSecret });
 
-    if (saveKey) {
-      // ════════════════════════════════════════
-      // ── 저장 모드: addAccount → setActiveAccount ─
-      // ════════════════════════════════════════
-      const state = useAuthStore.getState();
-      
-      // 동일 키가 이미 저장돼 있나? → 기존 계정 재활성화 (별명 무시)
-      const existing = state.accounts.find(
-        a => a.appkey === appKey && a.appsecret === appSecret
-      );
-      
-      if (existing) {
-        await setActiveAccount(existing.id, token);
-        // 사용자에게 알림 — 확인 누르면 홈으로 이동
-        Alert.alert(
-          '알림',
-          `이미 저장된 '${existing.nickname}' 계정으로 로그인되었어요.`,
-          [{
-            text: '확인',
-            onPress: () => router.replace('/(tabs)/'),
-          }],
-          { cancelable: false } // 바깥 탭으로 닫히지 않게
+      if (saveKey) {
+        // ════════════════════════════════════════
+        // ── 저장 모드: addAccount → setActiveAccount ─
+        // ════════════════════════════════════════
+        const state = useAuthStore.getState();
+        
+        // 동일 키가 이미 저장돼 있나? → 기존 계정 재활성화 (별명 무시)
+        const existing = state.accounts.find(
+          a => a.appkey === appKey && a.appsecret === appSecret
         );
-        return; //  아래쪽 router.replace 실행 방지
-      } else {
-        // 새 계정 추가
-        const newAccount = await addAccount({ appKey, appSecret }, nickname);
-        if (!newAccount) {
-          // 5개 초과 또는 별명 무효
-          if (state.accounts.length >= MAX_ACCOUNTS) {
-            Alert.alert(
-              '계정 한도 초과',
-              `저장 가능한 계정은 최대 ${MAX_ACCOUNTS}개예요.\n설정에서 기존 계정을 삭제 후 다시 시도해주세요.`
-            );
-          } else {
-            Alert.alert('계정 추가 실패', '별명을 확인해주세요.');
+        
+        if (existing) {
+          await setActiveAccount(existing.id, token);
+          // 사용자에게 알림 — 확인 누르면 홈/이전 화면으로 이동
+          Alert.alert(
+            '알림',
+            `이미 저장된 '${existing.nickname}' 계정으로 로그인되었어요.`,
+            [{
+              text: '확인',
+              onPress: () => navigateAfterLogin(), // 🔧 변경: replace → 헬퍼 호출
+            }],
+            { cancelable: false } // 바깥 탭으로 닫히지 않게
+          );
+          return; // 아래쪽 navigation 실행 방지
+        } else {
+          // 새 계정 추가
+          const newAccount = await addAccount({ appKey, appSecret }, nickname);
+          if (!newAccount) {
+            // 5개 초과 또는 별명 무효
+            if (state.accounts.length >= MAX_ACCOUNTS) {
+              Alert.alert(
+                '계정 한도 초과',
+                `저장 가능한 계정은 최대 ${MAX_ACCOUNTS}개예요.\n설정에서 기존 계정을 삭제 후 다시 시도해주세요.`
+              );
+            } else {
+              Alert.alert('계정 추가 실패', '별명을 확인해주세요.');
+            }
+            return;
           }
-          return;
+          await setActiveAccount(newAccount.id, token);
         }
-        await setActiveAccount(newAccount.id, token);
+      } else {
+        // ════════════════════════════════════════
+        // ── 저장 X 모드: 메모리만 (호환용 login()) ─
+        // ════════════════════════════════════════
+        await login({ appKey, appSecret }, token, false);
       }
-    } else {
-      // ════════════════════════════════════════
-      // ── 저장 X 모드: 메모리만 (호환용 login()) ─
-      // ════════════════════════════════════════
-      await login({ appKey, appSecret }, token, false);
+      
+      navigateAfterLogin(); // 🔧 변경: replace → 헬퍼 호출
+    } catch (e) {
+      Alert.alert('로그인 실패', '인증 중 오류가 발생했습니다.\nApp Key와 Secret을 확인해주세요.');
+    } finally {
+      setLoading(false);
     }
-    
-    router.replace('/(tabs)/');
-  } catch (e) {
-    Alert.alert('로그인 실패', '인증 중 오류가 발생했습니다.\nApp Key와 Secret을 확인해주세요.');
-  } finally {
-    setLoading(false);
   }
-}
  
   // 🔧 자동로그인 시도 중일 때만 풀스크린 로딩
   if (view === 'loading') {

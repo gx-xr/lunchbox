@@ -448,7 +448,7 @@ export async function runAutoTradingCycle(): Promise<void> {
  
   const now = hhmm();
   // 🧪 TEST_MODE: 시간대 무시
-  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return;
+  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return; // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
 
   // ─── 날짜 바뀌면 자동 리셋 ──────────────────────────────────
   // 🔧 풋/콜 분리, 각각 별도 체크
@@ -506,7 +506,7 @@ export async function runAutoTradingCycle(): Promise<void> {
   // ② 15:10~15:20 베이시스 실시간 수집 (30초마다)
   // t2111(선물가) + t1511(현물가) 직접 조회
   // 🧪 TEST_MODE: 시간대 무시
-  if (TEST_BYPASS_TIME || (now >= 1515 && now < 1520)) {
+  if (TEST_BYPASS_TIME || (now >= 1515 && now < 1520)) {  // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
     const nowMs = Date.now();
     if (nowMs - lastBasisCollectMs >= 30_000) {
       lastBasisCollectMs = nowMs;
@@ -527,7 +527,7 @@ export async function runAutoTradingCycle(): Promise<void> {
  
   // ③ 15:20~15:29 평균Basis 모니터링 Basis : (선물가 - 현물가)
   // 🔧 풋 전용 플래그/타임스탬프 사용
-  if (TEST_BYPASS_TIME || (now >= 1520 && now < 1530 && !store.futures1530DonePut)) {
+  if (TEST_BYPASS_TIME || (now >= 1520 && now < 1530 && !store.futures1530DonePut)) {  // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
     const nowMs = Date.now();
     if (nowMs - lastPutMonitorCheckMs >= 30_000) {
       lastPutMonitorCheckMs = nowMs;
@@ -566,7 +566,7 @@ export async function runAutoTradingCycle(): Promise<void> {
   // ④ 15:30~15:35 조건 확정 → 선물 자동매수 주문
   // 🧪 TEST_MODE: 시간대/완료플래그 무시
   // 🔧 풋 전용 플래그 사용
-  if (TEST_BYPASS_TIME || (now >= 1530 && now <= 1535 && !store.futures1530DonePut)) {
+  if (TEST_BYPASS_TIME || (now >= 1530 && now <= 1535 && !store.futures1530DonePut)) {  // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
     // 🔧 status 무관 — 아직 헤지 안 한 entry만 처리 (청산 상태와 독립)
     const hedgeEntries = store.getCurrentEntries().filter((e) => !e.hedged);
     for (const entry of hedgeEntries) {
@@ -619,7 +619,7 @@ export async function runAutoTradingCycle(): Promise<void> {
   }
  
   // ⑤ 15:45 종료
-  if (now >= 1545 && !store.futures1545Done) {
+  if (now >= 1545 && !store.futures1545Done) { // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
     store.setFutures1545Done(true);
     log('[15:45] 오늘의 자동매매 종료. 선물 포지션을 확인해주세요.', 'info');
  
@@ -650,7 +650,7 @@ export async function runAutoSellCycle(): Promise<void> {
  
   const now = hhmm();
   // 🧪 TEST_MODE: 시간대 무시
-  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return;
+  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return;  // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
  
   const configs = store.getAutoSellConfigs();
   if (configs.length === 0) return;
@@ -728,7 +728,7 @@ export async function runEmaAutoSellCycle(): Promise<void> {
  
   const now = hhmm();
   // 🧪 TEST_MODE: 시간대 무시
-  if (!TEST_BYPASS_TIME && (now < 900 || now > 1530)) return;
+  if (!TEST_BYPASS_TIME && (now < 900 || now > 1530)) return; 
  
   const emaEntries = store.getCurrentEntries().filter(
     (e) => e.status === 'monitoring' && e.emaEnabled === true
@@ -795,7 +795,7 @@ export async function runCallTradingCycle(): Promise<void> {
  
   const now = hhmm();
   // 🧪 TEST_MODE: 시간대 무시
-  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return;
+  if (!TEST_BYPASS_TIME && (now < 900 || now > 1550)) return;  // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
  
   const callEntries = store.getCurrentCallEntries().filter((e) => e.status === 'monitoring');
  
@@ -855,7 +855,7 @@ export async function runCallTradingCycle(): Promise<void> {
   // ② 15:10~15:20 베이시스 수집 (30초마다)
   // 풋매도와 동일한 basisBuffer 사용 (callCode 키로 저장)
   // 🧪 TEST_MODE: 시간대 무시
-  if (TEST_BYPASS_TIME || (now >= 1515 && now < 1520)) {
+  if (TEST_BYPASS_TIME || (now >= 1515 && now < 1520)) { // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
     const nowMs = Date.now();
     if (nowMs - lastCallBasisCollectMs >= 30_000) {
       lastCallBasisCollectMs = nowMs;
@@ -892,7 +892,7 @@ export async function runCallTradingCycle(): Promise<void> {
   // ③ 15:20~15:29 평균Basis 모니터링 Basis : (선물가 - 현물가)
   // 🧪 TEST_MODE: 시간대/완료플래그 무시
   // 🔧 콜 전용 플래그/타임스탬프 사용 + 누락됐던 타임스탬프 저장 추가
-  if (TEST_BYPASS_TIME || (now >= 1520 && now < 1530 && !store.futures1530DoneCall)) {
+  if (TEST_BYPASS_TIME || (now >= 1520 && now < 1530 && !store.futures1530DoneCall)) {  // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
     const nowMs = Date.now();
     if (nowMs - lastCallMonitorCheckMs >= 30_000) {
       lastCallMonitorCheckMs = nowMs; // 🔧 원래 코드에 빠져있던 타임스탬프 저장
@@ -926,7 +926,7 @@ export async function runCallTradingCycle(): Promise<void> {
   // 조건: 평균현물가 > 행사가 → 선물 매도
   // 🧪 TEST_MODE: 시간대/완료플래그 무시
   // 🔧 콜 전용 플래그 사용
-  if (TEST_BYPASS_TIME || (now >= 1530 && now <= 1535 && !store.futures1530DoneCall)) {
+  if (TEST_BYPASS_TIME || (now >= 1530 && now <= 1535 && !store.futures1530DoneCall)) { // ⚠️ 선물자동매매테스트 — 테스트 후 원래 시간(1515 등)으로 복원!
     // 🔧 callEntries(monitoring) 대신 전체 콜 entries 대상으로 — 청산 상태와 독립
     const hedgeCallEntries = store.getCurrentCallEntries().filter(e => !e.hedged);
     for (const entry of hedgeCallEntries) {
